@@ -1,0 +1,11 @@
+# Placeholder behavior pack for foundations week. Replace with real policy in week 3.
+origin: https://www.linkedin.com
+allowed_paths:
+  - /*
+denied_paths: []
+denied_actions: []
+rate_limits:
+  actions_per_minute: 30
+session:
+  max_duration_minutes: 60
+  kill_on_redirect_to_login: true

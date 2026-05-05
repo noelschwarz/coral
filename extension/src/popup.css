@@ -1,0 +1,30 @@
+/* Foundations popup styles — replace with real UI in week 1. */
+
+:root {
+  color-scheme: light dark;
+  font-family: system-ui, sans-serif;
+}
+
+body {
+  margin: 0;
+  min-width: 260px;
+}
+
+.wrap {
+  padding: 12px 14px;
+}
+
+h1 {
+  font-size: 1rem;
+  margin: 0 0 6px;
+}
+
+.muted {
+  margin: 0;
+  font-size: 0.85rem;
+  opacity: 0.75;
+}
+
+body.ready .wrap {
+  outline: none;
+}

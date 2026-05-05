@@ -1,0 +1,25 @@
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+.coverage
+htmlcov/
+.pytest_cache/
+.ruff_cache/
+
+# Coral local data (dev)
+.coral/
+
+# Extension
+extension/node_modules/
+extension/dist/
+
+# Editor
+.DS_Store
+.idea/
+.vscode/
+
+# Local copy of engineering spec (not pushed)
+coral-engineering-spec.md

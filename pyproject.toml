@@ -1,0 +1,71 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "coral"
+version = "0.1.0"
+description = "Local-first agent-native browser session bridge (daemon, CLI, Chrome extension)"
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.11"
+authors = [{ name = "Coral contributors" }]
+dependencies = [
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.32",
+  "typer>=0.15",
+  "pydantic>=2.9",
+  "pydantic-settings>=2.6",
+  "argon2-cffi>=23.1",
+  "cryptography>=43",
+  "sqlalchemy>=2.0",
+  "sqlcipher3>=0.6.2",
+  "mcp>=1.27",
+  "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.0",
+  "pytest-asyncio>=0.24",
+  "ruff>=0.8",
+  "pyright>=1.1",
+]
+
+[project.scripts]
+coral = "coral.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["coral"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+  "coral",
+  "docs",
+  "typings",
+  "README.md",
+  "LICENSE",
+  "pyproject.toml",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+"coral/cli.py" = ["B008"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.pyright]
+pythonVersion = "3.11"
+typeCheckingMode = "strict"
+venvPath = "."
+venv = ".venv"
+include = ["coral", "tests"]
+stubPath = "typings"

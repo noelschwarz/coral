@@ -6,7 +6,6 @@ build-backend = "hatchling.build"
 name = "coral"
 version = "0.1.0"
 description = "Local-first agent-native browser session bridge (daemon, CLI, Chrome extension)"
-readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
 authors = [{ name = "Coral contributors" }]
@@ -43,7 +42,6 @@ include = [
   "coral",
   "docs",
   "typings",
-  "README.md",
   "LICENSE",
   "pyproject.toml",
 ]

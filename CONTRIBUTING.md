@@ -16,7 +16,15 @@ uv run coral --help
 uv run pytest
 ```
 
-See [`README.md`](./README.md) for extension build steps.
+**Chrome extension (dev):**
+
+```bash
+cd extension
+npm ci
+npm run build
+```
+
+Load unpacked from `extension/dist/` in Chrome.
 
 ## Before you open a PR
 

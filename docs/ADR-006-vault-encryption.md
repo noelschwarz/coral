@@ -22,11 +22,27 @@ Alternatives considered:
 - Apply schema via forward migrations under `coral/migrations/` tracked in **`schema_migrations`**.
 - Serialize writes through an **`asyncio` queue + dedicated writer task** (spec §7.3); reads await the same single-worker executor so the SQLCipher connection is pinned to one OS thread.
 
-## Wheel / portability notes
+## Wheel / portability matrix
 
-CI and developers rely on published **`sqlcipher3`** wheels or local toolchain builds. If a platform lacks wheels or linking fails repeatedly, revisit ADR-006 and either pin `sqlcipher3-binary` (after verifying the CI matrix) or downgrade threat-model claims for metadata leakage (application-layer fallback).
+Observed availability for `sqlcipher3==0.6.2` on PyPI at the time of Track A:
+
+| Platform                     | Wheel published?                  | CI status |
+|------------------------------|-----------------------------------|-----------|
+| Linux x86_64 (manylinux)     | Yes (`sqlcipher3-binary`)         | Tier 1 — green in `ci.yml` |
+| macOS arm64                  | Yes (`sqlcipher3-binary`)         | Tier 1 — verified locally  |
+| macOS x86_64                 | Yes (`sqlcipher3-binary`)         | Tier 1 — verified locally  |
+| Linux aarch64 (manylinux)    | Partial / version-dependent       | Tier 2 — falls back to source build via `libsqlcipher-dev`; CI installs the dev package |
+| Windows x86_64               | Historically gappy                | Tier 3 — manual smoke only this session |
+
+The repo currently depends on **`sqlcipher3`** (the source distribution; `sqlcipher3-binary` is a separate project that re-exports the same module). Linux CI installs `libsqlcipher-dev` to satisfy the source build (see `.github/workflows/ci.yml`). We accept the upstream-maintenance risk: if `sqlcipher3` stops publishing or its OpenSSL linkage breaks, we revisit (see "When to revisit").
+
+## Accepted risks
+
+- **Plaintext `vault_meta.json`** next to `vault.db` leaks the salt and Argon2id parameters. This is unavoidable: the parameters must be readable before the key is derived. The salt is not a secret; the threat model in §6.2 T1/T9 is unchanged.
+- **Upstream wheel availability for `sqlcipher3`.** If wheels disappear for a Tier-1 platform, we either pin `sqlcipher3-binary` (after re-verifying its matrix) or fall back to application-layer AES-GCM and downgrade T1/T9 metadata claims in `THREAT_MODEL.md`. Decision deferred until that happens.
 
 ## When to revisit
 
 - Missing wheels or crashes on a Tier-1 platform for more than a short spike effort.
 - Migration to a maintained async driver that officially supports SQLCipher connectors without per-thread execution.
+- Windows promoted to Tier 1 in CI (currently smoke-only).

@@ -103,6 +103,20 @@ def _compress_blob(data: dict[str, Any]) -> bytes:
     return gzip.compress(json.dumps(data, separators=(",", ":"), sort_keys=True).encode("utf-8"))
 
 
+def _decompress_blob(blob: bytes) -> dict[str, Any]:
+    import gzip
+
+    if not blob:
+        return {}
+    try:
+        decoded = json.loads(gzip.decompress(blob).decode("utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise VaultIntegrityError("state_blob is not a valid gzipped JSON payload.") from exc
+    if not isinstance(decoded, dict):
+        raise VaultIntegrityError("state_blob payload must decode to a JSON object.")
+    return cast(dict[str, Any], decoded)
+
+
 def read_plaintext_meta(*, home: Path) -> PlaintextVaultMeta:
     from coral.paths import vault_plaintext_meta_path
 
@@ -651,6 +665,8 @@ __all__ = [
     "VaultIntegrityError",
     "VaultLockedError",
     "VaultMigrationError",
+    "_compress_blob",
+    "_decompress_blob",
     "make_demo_session_record",
     "read_plaintext_meta",
     "unlock_vault",

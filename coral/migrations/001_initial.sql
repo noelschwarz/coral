@@ -23,9 +23,11 @@ CREATE TABLE IF NOT EXISTS sessions (
     expires_at INTEGER,
     status TEXT NOT NULL,
     state_blob BLOB NOT NULL,
-    metadata TEXT NOT NULL DEFAULT '{}',
-    UNIQUE(origin)
+    metadata TEXT NOT NULL DEFAULT '{}'
 );
+
+CREATE INDEX IF NOT EXISTS idx_sessions_origin ON sessions(origin);
+CREATE INDEX IF NOT EXISTS idx_sessions_status ON sessions(status);
 
 CREATE TABLE IF NOT EXISTS policies (
     origin TEXT PRIMARY KEY,

@@ -1,55 +1,86 @@
-"""Load daemon and CLI configuration from ``~/.coral/config.toml``."""
+"""Daemon and CLI configuration (``config.toml`` + environment overlays)."""
 
 from __future__ import annotations
 
+import os
 import tomllib
 from pathlib import Path
+from typing import cast
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, computed_field
 
-from coral.paths import config_path
-
-
-class CoralConfig(BaseModel):
-    """User-facing configuration for Coral.
-
-    This is intentionally minimal for v1 foundations; expand as the product grows.
-    """
-
-    http_host: str = Field(default="127.0.0.1", description="Daemon HTTP bind address.")
-    http_port: int = Field(default=8765, description="Daemon HTTP port for extension/CLI API.")
-    mcp_http_host: str = Field(default="127.0.0.1", description="MCP HTTP bind address.")
-    mcp_http_port: int = Field(
-        default=8766,
-        description="MCP HTTP port (streamable transport).",
-    )
+from coral.paths import coral_home
 
 
-def load_config(*, home: Path | None = None) -> CoralConfig:
-    """Load config from disk, falling back to defaults when the file does not exist."""
-    path = config_path(home)
-    if not path.is_file():
-        return CoralConfig()
-    raw = tomllib.loads(path.read_text(encoding="utf-8"))
-    return CoralConfig.model_validate(raw)
+class Config(BaseModel):
+    """Validated Coral configuration (week 1 track defaults)."""
+
+    coral_home: Path = Field(default_factory=coral_home)
+    http_host: str = "127.0.0.1"
+    http_port: int = 8765
+    mcp_http_port: int = 8766
+    audit_log_max_age_days: int = 365
+    session_max_duration_minutes: int = 60
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def daemon_pid_file(self) -> Path:
+        return self.coral_home / "coral.pid"
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def vault_path(self) -> Path:
+        return self.coral_home / "vault.db"
+
+    @classmethod
+    def load(cls) -> Config:
+        """Load ``<coral_home>/config.toml`` when present and overlay env overrides."""
+        home = coral_home()
+        path = home / "config.toml"
+        data: dict[str, object] = {}
+        if path.is_file():
+            try:
+                loaded_any = tomllib.loads(path.read_text(encoding="utf-8"))
+            except tomllib.TOMLDecodeError as exc:
+                raise ValueError(f"Invalid TOML in configuration file ({path}).") from exc
+            data = cast(dict[str, object], loaded_any)
+
+        cfg = cls.model_validate({**data, "coral_home": home})
+
+        updates: dict[str, object] = {}
+        if raw_host := os.environ.get("CORAL_HTTP_HOST", "").strip():
+            updates["http_host"] = raw_host
+        if raw_port := os.environ.get("CORAL_HTTP_PORT", "").strip():
+            updates["http_port"] = int(raw_port)
+        if raw_mcp := os.environ.get("CORAL_MCP_HTTP_PORT", "").strip():
+            updates["mcp_http_port"] = int(raw_mcp)
+        if updates:
+            return cfg.model_copy(update=updates)
+        return cfg
+
+
+def load_config() -> Config:
+    """:func:`Config.load` alias retained for call-site ergonomics."""
+    return Config.load()
 
 
 def ensure_config_file_exists(*, home: Path | None = None) -> Path:
-    """Create ``config.toml`` with defaults if missing; return the path."""
-    path = config_path(home)
+    """Create ``config.toml`` with defaults if missing."""
+    base = home.expanduser().resolve() if home is not None else coral_home()
+    path = base / "config.toml"
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.is_file():
         return path
-    defaults = CoralConfig().model_dump()
-    # Keep deterministic, human-readable defaults for early contributors.
+    template = Config(coral_home=base)
     lines = [
         "# Coral configuration (TOML).",
         "# See coral-engineering-spec.md for semantics.",
         "",
-        f'http_host = "{defaults["http_host"]}"',
-        f"http_port = {defaults['http_port']}",
-        f'mcp_http_host = "{defaults["mcp_http_host"]}"',
-        f"mcp_http_port = {defaults['mcp_http_port']}",
+        f'http_host = "{template.http_host}"',
+        f"http_port = {template.http_port}",
+        f"mcp_http_port = {template.mcp_http_port}",
+        f"audit_log_max_age_days = {template.audit_log_max_age_days}",
+        f"session_max_duration_minutes = {template.session_max_duration_minutes}",
         "",
     ]
     path.write_text("\n".join(lines), encoding="utf-8")

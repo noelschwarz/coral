@@ -6,22 +6,27 @@ interaction boundaries like passphrase prompts (never log passphrases).
 
 from __future__ import annotations
 
+import asyncio
 import os
 import signal
-import subprocess
-import sys
-import tempfile
 import time
+from contextlib import suppress
 from pathlib import Path
 
-import httpx
+import psutil
 import typer
 
 from coral import __version__
 from coral.config import ensure_config_file_exists, load_config
-from coral.daemon import run_daemon_blocking
-from coral.paths import coral_home, daemon_pid_path, vault_db_path
-from coral.vault import VaultError, init_vault, validate_vault_unlock
+from coral.crypto import MIN_PASSPHRASE_LENGTH
+from coral.daemon import pid_running, run_daemon_blocking
+from coral.paths import coral_home, vault_db_path, vault_plaintext_meta_path
+from coral.vault import (
+    Vault,
+    VaultError,
+    VaultIntegrityError,
+    VaultLockedError,
+)
 
 app = typer.Typer(
     no_args_is_help=True,
@@ -31,7 +36,7 @@ app = typer.Typer(
 
 
 @app.callback(invoke_without_command=True)
-def _main_callback(  # pyright: ignore[reportUnusedFunction]  # registered by Typer
+def _main_callback(  # pyright: ignore[reportUnusedFunction]
     ctx: typer.Context,
     version: bool = typer.Option(
         False,
@@ -53,19 +58,23 @@ def _home(explicit: Path | None) -> Path:
     return explicit.expanduser().resolve() if explicit is not None else coral_home()
 
 
-def _read_passphrase(*, prompt: str) -> str:
+def _new_passphrase_prompt() -> str:
     env = os.environ.get("CORAL_PASSPHRASE", "").strip()
     if env:
         return env
-    return typer.prompt(prompt, hide_input=True)
+    first = typer.prompt("New vault passphrase", hide_input=True)
+    second = typer.prompt("Confirm passphrase", hide_input=True)
+    if first != second:
+        typer.secho("Passphrases do not match; aborting.", err=True, fg=typer.colors.RED)
+        raise typer.Exit(code=2)
+    return first
 
 
-def _pid_alive(pid: int) -> bool:
-    try:
-        os.kill(pid, 0)
-    except OSError:
-        return False
-    return True
+def _unlock_passphrase_prompt() -> str:
+    env = os.environ.get("CORAL_PASSPHRASE", "").strip()
+    if env:
+        return env
+    return typer.prompt("Vault passphrase", hide_input=True)
 
 
 @app.command()
@@ -78,132 +87,117 @@ def init(
     force: bool = typer.Option(
         False,
         "--force",
-        help="(Unsafe) Reserved for future reset flows; currently unused.",
-        hidden=True,
+        help="Destroy any existing vault in this Coral home after interactive confirmation.",
     ),
 ) -> None:
     """Create a new encrypted vault at ~/.coral/vault.db (configurable via --home / $CORAL_HOME)."""
-    _ = force
     coral_dir = _home(home)
     os.environ["CORAL_HOME"] = str(coral_dir)
 
-    passphrase = _read_passphrase(prompt="New vault passphrase")
-    confirm = _read_passphrase(prompt="Confirm passphrase")
-    if passphrase != confirm:
-        typer.secho("Passphrases do not match; aborting.", err=True, fg=typer.colors.RED)
+    db_path = vault_db_path(coral_dir)
+    meta_path = vault_plaintext_meta_path(coral_dir)
+    vault_exists = db_path.is_file() or meta_path.is_file()
+
+    if vault_exists and not force:
+        typer.secho(
+            f"Vault already exists at {db_path}. "
+            "Use `coral init --force` to wipe and reinitialize, "
+            "or delete the files manually. Note: rotation is not yet supported.",
+            err=True,
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=1)
+
+    if vault_exists and force:
+        typer.confirm(
+            "This will permanently delete the existing Coral vault in "
+            f"{coral_dir}. Continue?",
+            abort=True,
+        )
+        db_path.unlink(missing_ok=True)
+        meta_path.unlink(missing_ok=True)
+
+    passphrase = _new_passphrase_prompt()
+
+    if len(passphrase) < MIN_PASSPHRASE_LENGTH:
+        typer.secho(
+            f"Passphrase must be at least {MIN_PASSPHRASE_LENGTH} characters "
+            "(engineering spec §6.2 / T9).",
+            err=True,
+            fg=typer.colors.RED,
+        )
         raise typer.Exit(code=2)
 
-    try:
+    async def _run_init() -> None:
         ensure_config_file_exists(home=coral_dir)
-        path = init_vault(home=coral_dir, passphrase=passphrase)
+        vault = await Vault.initialize(coral_dir, passphrase)
+        await vault.close()
+
+    try:
+        asyncio.run(_run_init())
     except VaultError as exc:
         typer.secho(f"init failed: {exc}", err=True, fg=typer.colors.RED)
         raise typer.Exit(code=1) from exc
 
-    typer.echo(f"Initialized encrypted vault at {path}")
+    typer.echo(f"Initialized encrypted vault at {db_path}")
 
 
 @app.command()
 def start(
     home: Path | None = typer.Option(None, "--home", help="Coral data directory."),
-    foreground: bool = typer.Option(False, "--foreground", help="Run daemon in the foreground."),
 ) -> None:
-    """Start the Coral daemon (HTTP + MCP HTTP) if it is not already running."""
+    """Start the Coral daemon (HTTP + MCP HTTP). Runs until SIGINT or SIGTERM."""
     coral_dir = _home(home)
     os.environ["CORAL_HOME"] = str(coral_dir)
 
-    pid_path = daemon_pid_path(coral_dir)
+    cfg = load_config()
+    pid_path = cfg.daemon_pid_file
+
     if pid_path.is_file():
         try:
             pid = int(pid_path.read_text(encoding="utf-8").strip())
         except ValueError:
             pid_path.unlink(missing_ok=True)
+            typer.secho("Removed corrupt PID file.", fg=typer.colors.YELLOW)
         else:
-            if _pid_alive(pid):
+            if pid_running(pid):
                 typer.secho(
-                    f"Daemon already running (pid={pid}).",
+                    f"Daemon already running (PID {pid}).",
                     err=True,
                     fg=typer.colors.YELLOW,
                 )
                 raise typer.Exit(code=1)
+            typer.secho(f"Removing stale PID file (PID {pid} not running).", fg=typer.colors.YELLOW)
             pid_path.unlink(missing_ok=True)
 
-    passphrase = _read_passphrase(prompt="Vault passphrase")
+    passphrase = _unlock_passphrase_prompt()
+
+    ensure_config_file_exists(home=coral_dir)
+
     try:
-        validate_vault_unlock(home=coral_dir, passphrase=passphrase)
-    except VaultError as exc:
-        typer.secho(f"Vault unavailable: {exc}", err=True, fg=typer.colors.RED)
-        raise typer.Exit(code=1) from exc
-
-    cfg = load_config(home=coral_dir)
-    if foreground:
-        typer.echo("Starting Coral daemon in the foreground (Ctrl+C to stop).")
         run_daemon_blocking(home=coral_dir, passphrase=passphrase)
-        return
-
-    fd, tmp_path = tempfile.mkstemp(prefix="coral-pass-", suffix=".tmp", text=True)
-    os.close(fd)
-    secret_path = Path(tmp_path)
-    secret_path.write_text(passphrase, encoding="utf-8")
-    secret_path.chmod(0o600)
-
-    env = os.environ.copy()
-    env.update(
-        {
-            "CORAL_HOME": str(coral_dir),
-            "CORAL_PASSPHRASE_FILE": str(secret_path),
-        }
-    )
-    cmd = [sys.executable, "-m", "coral.daemon"]
-    if os.name == "nt":
-        creationflags = subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
-        subprocess.Popen(
-            cmd,
-            env=env,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            creationflags=creationflags,
+    except (VaultLockedError, VaultIntegrityError):
+        typer.secho(
+            "Incorrect passphrase or vault corrupted.",
+            err=True,
+            fg=typer.colors.RED,
         )
-    else:
-        subprocess.Popen(
-            cmd,
-            env=env,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
-            start_new_session=True,
-        )
-
-    # Wait briefly until healthz responds or fail fast if the child exits immediately.
-    url = f"http://{cfg.http_host}:{cfg.http_port}/healthz"
-    for _ in range(50):
-        time.sleep(0.05)
-        try:
-            resp = httpx.get(url, timeout=0.2)
-        except httpx.HTTPError:
-            continue
-        if resp.status_code == 200:
-            typer.echo(f"Coral daemon started ({url} ok).")
-            return
-
-    typer.secho(
-        "Daemon process spawned but /healthz did not become ready in time.",
-        err=True,
-        fg=typer.colors.RED,
-    )
-    raise typer.Exit(code=1)
+        raise typer.Exit(code=1) from None
 
 
 @app.command("stop")
 def stop_cmd(
     home: Path | None = typer.Option(None, "--home", help="Coral data directory."),
 ) -> None:
-    """Stop a background Coral daemon using the PID file written by `coral start`."""
+    """Stop a Coral daemon using the PID file written by ``coral start``."""
     coral_dir = _home(home)
-    pid_path = daemon_pid_path(coral_dir)
+    os.environ["CORAL_HOME"] = str(coral_dir)
+
+    cfg = load_config()
+    pid_path = cfg.daemon_pid_file
+
     if not pid_path.is_file():
-        typer.secho("Daemon does not appear to be running (no PID file).", fg=typer.colors.YELLOW)
+        typer.secho("No daemon running.", fg=typer.colors.YELLOW)
         raise typer.Exit(code=1)
 
     try:
@@ -213,27 +207,49 @@ def stop_cmd(
         typer.secho("Removed corrupt PID file.", fg=typer.colors.YELLOW)
         raise typer.Exit(code=1) from None
 
-    if not _pid_alive(pid):
+    if not pid_running(pid):
         pid_path.unlink(missing_ok=True)
-        typer.secho("Daemon PID is stale; removed PID file.", fg=typer.colors.YELLOW)
+        typer.secho("Removed stale PID file.", fg=typer.colors.YELLOW)
         raise typer.Exit(code=0)
 
-    typer.echo(f"Stopping Coral daemon (pid={pid})...")
-    os.kill(pid, signal.SIGTERM)
+    typer.echo(f"Stopping Coral daemon (PID {pid})...")
+    proc: psutil.Process | None = None
+    try:
+        proc = psutil.Process(pid)
+        proc.terminate()
+    except psutil.NoSuchProcess:
+        pid_path.unlink(missing_ok=True)
+        typer.echo("Daemon already exited.")
+        raise typer.Exit(code=0) from None
+    except psutil.Error:
+        os.kill(pid, signal.SIGTERM)
 
-    for _ in range(100):
-        time.sleep(0.05)
-        if not _pid_alive(pid):
+    deadline = time.monotonic() + 10.0
+    while time.monotonic() < deadline:
+        if not pid_path.is_file():
+            typer.echo("Stopped.")
+            raise typer.Exit(code=0)
+        if not pid_running(pid):
             pid_path.unlink(missing_ok=True)
             typer.echo("Stopped.")
-            return
+            raise typer.Exit(code=0)
+        time.sleep(0.05)
 
     typer.secho(
-        "Daemon did not exit cleanly; you may need to kill it manually.",
+        "Daemon did not exit after SIGTERM; sending SIGKILL. "
+        "Orphaned Chromium processes may remain once Playwright lands.",
         err=True,
-        fg=typer.colors.RED,
+        fg=typer.colors.YELLOW,
     )
-    raise typer.Exit(code=1)
+    try:
+        if proc is not None:
+            proc.kill()
+        else:
+            psutil.Process(pid).kill()
+    except psutil.Error:
+        with suppress(OSError):
+            os.kill(pid, signal.SIGKILL)
+    pid_path.unlink(missing_ok=True)
 
 
 @app.command("mcp-stdio")

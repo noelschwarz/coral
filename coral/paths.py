@@ -23,16 +23,21 @@ def vault_db_path(home: Path | None = None) -> Path:
     return base / "vault.db"
 
 
-def vault_meta_path(home: Path | None = None) -> Path:
-    """Return path to vault key derivation metadata (salt + Argon2 parameters)."""
+def vault_plaintext_meta_path(home: Path | None = None) -> Path:
+    """Return path to passphrase derivation metadata (salt + Argon2 parameters).
+
+    This file is intentionally plaintext: the vault encryption key is derived from it
+    plus the user's passphrase (ADR-006). Encrypted ``vault_metadata`` mirrors it for
+    integrity checks after unlock.
+    """
     base = home or coral_home()
-    return base / "vault.meta.json"
+    return base / "vault_meta.json"
 
 
 def daemon_pid_path(home: Path | None = None) -> Path:
-    """Return the daemon PID file path used by ``coral start`` / ``coral stop``."""
+    """PID file for ``coral start`` / ``coral stop`` (engineering spec week 1 track)."""
     base = home or coral_home()
-    return base / "daemon.pid"
+    return base / "coral.pid"
 
 
 def config_path(home: Path | None = None) -> Path:

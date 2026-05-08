@@ -1,38 +1,75 @@
-"""Daemon orchestration: HTTP API, MCP HTTP transport, and lifecycle hooks.
-
-The Coral daemon is a single asyncio process (spec §3.2). Playwright and policy
-integration arrive in later milestones; this module only wires networking and vault
-unlock validation.
-"""
+"""Daemon orchestration: HTTP API, MCP HTTP transport, vault lifecycle."""
 
 from __future__ import annotations
 
 import asyncio
 import os
+import signal
 from pathlib import Path
+from types import FrameType
 
 import uvicorn
 
 from coral.config import load_config
+from coral.crypto import generate_challenge
 from coral.http_api import build_http_app
 from coral.mcp_server import build_mcp_server
-from coral.paths import daemon_pid_path
-from coral.vault import validate_vault_unlock
+from coral.vault import unlock_vault
 
 
-async def run_daemon(*, home: Path, passphrase: str) -> None:
-    """Run the Coral daemon until cancelled or `KeyboardInterrupt`."""
-    cfg = load_config(home=home)
-    validate_vault_unlock(home=home, passphrase=passphrase)
+async def run_daemon(*, home: Path | None = None, passphrase: str) -> None:
+    """Run Coral until SIGINT/SIGTERM."""
+    if home is not None:
+        os.environ["CORAL_HOME"] = str(home.resolve())
 
-    pid_path = daemon_pid_path(home)
+    cfg = load_config()
+    vault = await unlock_vault(home=cfg.coral_home, passphrase=passphrase)
+
+    challenge = generate_challenge()
+    vault_location = cfg.vault_path
+    api_base = f"http://{cfg.http_host}:{cfg.http_port}"
+
+    print(
+        "\n".join(
+            [
+                "Coral daemon started.",
+                f"Vault: {vault_location}",
+                f"HTTP API: {api_base}",
+                "",
+                "Extension handshake challenge (paste into the Coral extension popup):",
+                "",
+                f"    {challenge}",
+                "",
+                "This challenge is valid for the lifetime of this daemon process.",
+                "",
+            ]
+        ),
+        flush=True,
+    )
+
+    pid_path = cfg.daemon_pid_file
     pid_path.parent.mkdir(parents=True, exist_ok=True)
     pid_path.write_text(str(os.getpid()), encoding="utf-8")
 
-    http_app = build_http_app()
-    mcp = build_mcp_server()
-    mcp_app = mcp.streamable_http_app()
+    shutdown = asyncio.Event()
 
+    def _request_shutdown() -> None:
+        shutdown.set()
+
+    loop = asyncio.get_running_loop()
+    try:
+        for sig in (signal.SIGINT, signal.SIGTERM):
+            loop.add_signal_handler(sig, _request_shutdown)
+    except NotImplementedError:
+
+        def _fallback_sig(_signum: int, _frame: FrameType | None) -> None:
+            _request_shutdown()
+
+        signal.signal(signal.SIGINT, _fallback_sig)
+        if hasattr(signal, "SIGTERM"):
+            signal.signal(signal.SIGTERM, _fallback_sig)
+
+    http_app = build_http_app()
     http_server = uvicorn.Server(
         uvicorn.Config(
             http_app,
@@ -42,45 +79,37 @@ async def run_daemon(*, home: Path, passphrase: str) -> None:
             loop="asyncio",
         )
     )
+    mcp = build_mcp_server(http_host=cfg.http_host, http_port=cfg.mcp_http_port)
     mcp_server = uvicorn.Server(
         uvicorn.Config(
-            mcp_app,
-            host=cfg.mcp_http_host,
+            mcp.streamable_http_app(),
+            host=cfg.http_host,
             port=cfg.mcp_http_port,
             log_level="info",
             loop="asyncio",
         )
     )
 
+    http_task = asyncio.create_task(http_server.serve(), name="coral-http")
+    mcp_task = asyncio.create_task(mcp_server.serve(), name="coral-mcp-http")
+
     try:
-        await asyncio.gather(http_server.serve(), mcp_server.serve())
+        await shutdown.wait()
     finally:
+        http_server.should_exit = True
+        mcp_server.should_exit = True
+        await asyncio.gather(http_task, mcp_task, return_exceptions=True)
+        await vault.close()
         pid_path.unlink(missing_ok=True)
 
 
-def run_daemon_blocking(*, home: Path, passphrase: str) -> None:
-    """Run :func:`run_daemon` from synchronous entrypoints (child process)."""
-    try:
-        asyncio.run(run_daemon(home=home, passphrase=passphrase))
-    except KeyboardInterrupt:
-        return
+def run_daemon_blocking(*, home: Path | None = None, passphrase: str) -> None:
+    """Run :func:`run_daemon` from synchronous callers."""
+    asyncio.run(run_daemon(home=home, passphrase=passphrase))
 
 
-def _read_passphrase_from_env_file() -> str:
-    raw_path = os.environ.get("CORAL_PASSPHRASE_FILE", "").strip()
-    if not raw_path:
-        raise RuntimeError("Missing CORAL_PASSPHRASE_FILE environment variable.")
-    path = Path(raw_path)
-    try:
-        return path.read_text(encoding="utf-8")
-    finally:
-        path.unlink(missing_ok=True)
+def pid_running(pid: int) -> bool:
+    """Return True if ``pid`` is alive (uses ``psutil`` for portability)."""
+    import psutil
 
-
-if __name__ == "__main__":
-    # Child process entry (`python -m coral.daemon`).
-    from coral.paths import coral_home
-
-    passphrase = _read_passphrase_from_env_file()
-    home = coral_home()
-    run_daemon_blocking(home=home, passphrase=passphrase)
+    return psutil.pid_exists(pid)

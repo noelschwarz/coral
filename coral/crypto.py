@@ -1,120 +1,109 @@
-"""Cryptographic helpers for vault keys and API bearer tokens.
-
-Passphrases, raw keys, and bearer token material must never be logged.
-"""
+"""Cryptographic helpers: Argon2id key derivation, tokens, handshake challenges."""
 
 from __future__ import annotations
 
 import base64
 import hashlib
 import secrets
-import string
-from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import cast
 
 from argon2.low_level import Type, hash_secret_raw
 
-# Reference parameters from coral-engineering-spec §6.3 (~500ms on a reference laptop).
-DEFAULT_ARGON2_TIME_COST: int = 3
-DEFAULT_ARGON2_MEMORY_KIB: int = 65536  # 64 MiB
-DEFAULT_ARGON2_PARALLELISM: int = 4
-DEFAULT_ARGON2_HASH_LEN: int = 32
-DEFAULT_ARGON2_TYPE: Type = Type.ID
+MIN_PASSPHRASE_LENGTH = 12
 
-MIN_PASSPHRASE_LENGTH: int = 12
+# Alphanumerics excluding 0, O, 1, I, L for readable terminal challenges.
+_CHALLENGE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
+
+CHALLENGE_PATTERN = (
+    r"^[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$"
+)
 
 
 @dataclass(frozen=True, slots=True)
-class Argon2Parameters:
-    """Serializable Argon2id parameters used when opening a vault."""
+class Argon2idParams:
+    """Argon2id tuning parameters (memory_cost is KiB)."""
 
-    time_cost: int = DEFAULT_ARGON2_TIME_COST
-    memory_kib: int = DEFAULT_ARGON2_MEMORY_KIB
-    parallelism: int = DEFAULT_ARGON2_PARALLELISM
-    hash_len: int = DEFAULT_ARGON2_HASH_LEN
-
-    def as_dict(self) -> dict[str, int | str]:
-        return {
-            "argon2_time_cost": self.time_cost,
-            "argon2_memory_kib": self.memory_kib,
-            "argon2_parallelism": self.parallelism,
-            "argon2_hash_len": self.hash_len,
-            "argon2_type": "argon2id",
-        }
-
-    @classmethod
-    def from_dict(cls, data: Mapping[str, object]) -> Argon2Parameters:
-        time_cost = int(cast(int | str, data["argon2_time_cost"]))
-        memory_kib = int(cast(int | str, data["argon2_memory_kib"]))
-        parallelism = int(cast(int | str, data["argon2_parallelism"]))
-        hash_len = int(cast(int | str, data["argon2_hash_len"]))
-        arg_type = str(data.get("argon2_type", "argon2id"))
-        if arg_type != "argon2id":
-            raise ValueError(f"Unsupported Argon2 type: {arg_type!r}")
-        return cls(
-            time_cost=time_cost,
-            memory_kib=memory_kib,
-            parallelism=parallelism,
-            hash_len=hash_len,
-        )
+    memory_cost: int
+    time_cost: int
+    parallelism: int
+    hash_len: int
+    salt_len: int
 
 
-def assert_passphrase_policy(passphrase: str) -> None:
-    """Validate passphrase strength rules for v1."""
+# Spec §6.3 (~500ms target on reference laptop).
+PRODUCTION_PARAMS = Argon2idParams(
+    memory_cost=65536,
+    time_cost=3,
+    parallelism=4,
+    hash_len=32,
+    salt_len=16,
+)
+
+# Fast iteration in tests only — never use for real vaults.
+TEST_PARAMS = Argon2idParams(
+    memory_cost=8192,
+    time_cost=1,
+    parallelism=1,
+    hash_len=32,
+    salt_len=16,
+)
+
+
+def derive_key(passphrase: str, salt: bytes, *, params: Argon2idParams) -> bytearray:
+    """Derive a raw SQLCipher key (``hash_len`` bytes) using Argon2id."""
     if len(passphrase) < MIN_PASSPHRASE_LENGTH:
         raise ValueError(
             f"Passphrase must be at least {MIN_PASSPHRASE_LENGTH} characters "
-            f"(see engineering spec §6.3 / T9)."
+            "(engineering spec §6.2 / T9)."
         )
-
-
-def derive_vault_key(*, passphrase: str, salt: bytes, params: Argon2Parameters) -> bytes:
-    """Derive a raw SQLCipher key from a user passphrase using Argon2id."""
-    assert_passphrase_policy(passphrase)
-    return hash_secret_raw(
+    if len(salt) != params.salt_len:
+        raise ValueError(
+            f"Salt must be exactly {params.salt_len} bytes for the selected Argon2idParams."
+        )
+    raw = hash_secret_raw(
         secret=passphrase.encode("utf-8"),
         salt=salt,
         time_cost=params.time_cost,
-        memory_cost=params.memory_kib,
+        memory_cost=params.memory_cost,
         parallelism=params.parallelism,
         hash_len=params.hash_len,
-        type=DEFAULT_ARGON2_TYPE,
+        type=Type.ID,
     )
+    return bytearray(raw)
 
 
-def format_sqlcipher_hex_pragma_key(raw_key: bytes) -> str:
-    """Format a raw key for SQLCipher ``PRAGMA key`` using hex encoding."""
-    if len(raw_key) not in {16, 24, 32}:
+def format_sqlcipher_hex_pragma_key(raw_key: bytes | bytearray) -> str:
+    """Format ``PRAGMA key`` literal for SQLCipher raw hex keys."""
+    key_bytes = bytes(raw_key)
+    if len(key_bytes) not in {16, 24, 32}:
         raise ValueError("SQLCipher raw key must be 16, 24, or 32 bytes.")
-    return "x'" + raw_key.hex() + "'"
+    return "x'" + key_bytes.hex() + "'"
 
 
-def hash_api_token(token: str) -> str:
-    """Return the hex-encoded SHA-256 digest of a bearer token for ``api_tokens.token_hash``."""
+def generate_salt(*, params: Argon2idParams | None = None) -> bytes:
+    """Return a new random salt (length from ``params`` or production defaults)."""
+    n = params.salt_len if params is not None else PRODUCTION_PARAMS.salt_len
+    return secrets.token_bytes(n)
+
+
+def generate_token() -> str:
+    """32 random bytes, base64url without padding."""
+    return base64.urlsafe_b64encode(secrets.token_bytes(32)).decode("ascii").rstrip("=")
+
+
+def hash_token(token: str) -> str:
+    """SHA-256 hex digest for ``api_tokens.token_hash``."""
     return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
 
-def generate_api_token_bytes() -> bytes:
-    """Generate 32 random bytes for an API bearer token (spec §6.3)."""
-    return secrets.token_bytes(32)
-
-
-def encode_api_token(token_bytes: bytes) -> str:
-    """Encode API token bytes for transport (URL-safe base64, no padding)."""
-    return base64.urlsafe_b64encode(token_bytes).decode("ascii").rstrip("=")
-
-
-def generate_challenge_code() -> str:
-    """Generate a daemon handshake challenge in groups of four alphanumerics.
-
-    Spec §6.3: four groups of four characters from ``secrets`` (~80 bits entropy).
-    """
-    alphabet = string.ascii_uppercase + string.digits
-    groups = ["".join(secrets.choice(alphabet) for _ in range(4)) for _ in range(4)]
+def generate_challenge() -> str:
+    """Handshake challenge: four groups of four characters (hyphen-separated)."""
+    groups = ["".join(secrets.choice(_CHALLENGE_ALPHABET) for _ in range(4)) for _ in range(4)]
     return "-".join(groups)
 
 
-def random_salt(*, num_bytes: int = 16) -> bytes:
-    """Generate a new salt for vault key derivation."""
-    return secrets.token_bytes(num_bytes)
+def constant_time_compare(a: str, b: str) -> bool:
+    """Constant-time string comparison for hashed secrets."""
+    if len(a) != len(b):
+        return False
+    return secrets.compare_digest(a.encode("utf-8"), b.encode("utf-8"))

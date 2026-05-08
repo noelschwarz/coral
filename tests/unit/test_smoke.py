@@ -3,11 +3,12 @@ from importlib import metadata
 import pytest
 
 import coral
+from coral.crypto import TEST_PARAMS
 from coral.http_api import build_http_app
 from coral.mcp_server import build_mcp_server
 from coral.models import schema_table_names
 from coral.paths import coral_home
-from coral.vault import init_vault, validate_vault_unlock
+from coral.vault import Vault, unlock_vault
 
 
 def test_package_version_matches_metadata() -> None:
@@ -37,13 +38,17 @@ def test_healthz_via_asgi() -> None:
     assert payload["version"] == coral.__version__
 
 
-def test_init_vault_round_trip(
+@pytest.mark.asyncio
+async def test_init_vault_round_trip(
     monkeypatch: pytest.MonkeyPatch, tmp_path_factory: pytest.TempPathFactory
 ) -> None:
     home = tmp_path_factory.mktemp("vault")
     monkeypatch.setenv("CORAL_HOME", str(home))
-    init_vault(home=home, passphrase="correct horse battery")
-    validate_vault_unlock(home=home, passphrase="correct horse battery")
+    passphrase = "correct horse battery staple"
+    vault = await Vault.initialize(home, passphrase, params=TEST_PARAMS)
+    await vault.close()
+    vault2 = await unlock_vault(home=home, passphrase=passphrase)
+    await vault2.close()
 
 
 def test_mcp_streamable_http_initialize() -> None:

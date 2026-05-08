@@ -110,8 +110,7 @@ def init(
 
     if vault_exists and force:
         typer.confirm(
-            "This will permanently delete the existing Coral vault in "
-            f"{coral_dir}. Continue?",
+            f"This will permanently delete the existing Coral vault in {coral_dir}. Continue?",
             abort=True,
         )
         db_path.unlink(missing_ok=True)

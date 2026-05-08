@@ -14,9 +14,7 @@ MIN_PASSPHRASE_LENGTH = 12
 # Alphanumerics excluding 0, O, 1, I, L for readable terminal challenges.
 _CHALLENGE_ALPHABET = "ABCDEFGHJKMNPQRSTUVWXYZ23456789"
 
-CHALLENGE_PATTERN = (
-    r"^[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$"
-)
+CHALLENGE_PATTERN = r"^[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$"
 
 
 @dataclass(frozen=True, slots=True)

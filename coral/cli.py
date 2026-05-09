@@ -252,13 +252,37 @@ def stop_cmd(
 
 
 @app.command("mcp-stdio")
-def mcp_stdio() -> None:
-    """Run Coral's MCP server over stdio (for MCP clients that spawn a subprocess)."""
+def mcp_stdio(
+    home: Path | None = typer.Option(None, "--home", help="Coral data directory."),
+    agent_name: str = typer.Option(
+        "stdio",
+        "--agent-name",
+        help="Identity recorded in audit_log.agent_id for this MCP session.",
+    ),
+) -> None:
+    """Run Coral's MCP server over stdio (for MCP clients that spawn a subprocess).
+
+    Opens the vault using ``CORAL_PASSPHRASE`` (interactive prompt if unset). The
+    daemon may also be running concurrently; SQLCipher tolerates multiple readers
+    on the same database file.
+    """
     import asyncio
 
     from coral.mcp_server import run_mcp_stdio
+    from coral.vault import unlock_vault
 
-    asyncio.run(run_mcp_stdio())
+    coral_dir = _home(home)
+    os.environ["CORAL_HOME"] = str(coral_dir)
+    passphrase = _unlock_passphrase_prompt()
+
+    async def _run() -> None:
+        vault = await unlock_vault(home=coral_dir, passphrase=passphrase)
+        try:
+            await run_mcp_stdio(vault=vault, agent_name=agent_name)
+        finally:
+            await vault.close()
+
+    asyncio.run(_run())
 
 
 @app.command("status")

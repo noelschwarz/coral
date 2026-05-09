@@ -12,8 +12,22 @@ uv run coral init                  # creates ~/.coral/vault.db (+ vault_meta.jso
 uv run coral start                 # foreground daemon; prints handshake challenge; Ctrl+C to stop
 # in another terminal:
 curl http://127.0.0.1:8765/healthz
+
+# Drive the daemon end-to-end with the printed challenge:
+curl -X POST http://127.0.0.1:8765/auth/handshake \
+  -H "Content-Type: application/json" \
+  -d '{"challenge":"ABCD-EFGH-JKLM-NPQR","client_name":"curl-test"}'
+# response: {"token":"...","expires_at":...}
+
+curl http://127.0.0.1:8765/sessions \
+  -H "Authorization: Bearer <token>"
+
 uv run coral stop                  # if you run start in the background with tooling that backgrounds processes
 ```
+
+The challenge is single-use: the first successful `/auth/handshake` consumes it.
+Restart the daemon to mint a new challenge. Tokens default to 24h for extension
+clients and 30 days for the CLI bridge token (configurable via `Config`).
 
 Environment variables:
 

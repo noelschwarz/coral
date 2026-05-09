@@ -21,6 +21,9 @@ class Config(BaseModel):
     mcp_http_port: int = 8766
     audit_log_max_age_days: int = 365
     session_max_duration_minutes: int = 60
+    extension_token_ttl_seconds: int = 24 * 60 * 60
+    cli_token_ttl_seconds: int = 30 * 24 * 60 * 60
+    handshake_rate_limit_per_minute: int = 5
 
     @computed_field  # type: ignore[prop-decorator]
     @property
@@ -31,6 +34,11 @@ class Config(BaseModel):
     @property
     def vault_path(self) -> Path:
         return self.coral_home / "vault.db"
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def cli_token_path(self) -> Path:
+        return self.coral_home / "cli.token"
 
     @classmethod
     def load(cls) -> Config:

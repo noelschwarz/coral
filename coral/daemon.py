@@ -3,18 +3,31 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import signal
+import time
 from pathlib import Path
 from types import FrameType
 
 import uvicorn
 
-from coral.config import load_config
-from coral.crypto import generate_challenge
-from coral.http_api import build_http_app
-from coral.mcp_server import build_mcp_server
-from coral.vault import unlock_vault
+from coral.config import Config, load_config
+from coral.crypto import generate_challenge, generate_token, hash_token
+from coral.http_api import HandshakeState, build_http_app
+from coral.mcp_server import MCPRuntime, build_mcp_server, set_runtime
+from coral.vault import Vault, unlock_vault
+
+
+async def _provision_cli_token(*, cfg: Config, vault: Vault) -> None:
+    raw = generate_token()
+    expires_at = int(time.time()) + int(cfg.cli_token_ttl_seconds)
+    await vault.insert_token(hash_token(raw), name="cli", expires_at=expires_at)
+    path = cfg.cli_token_path
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(raw, encoding="utf-8")
+    with contextlib.suppress(OSError):
+        os.chmod(path, 0o600)
 
 
 async def run_daemon(*, home: Path | None = None, passphrase: str) -> None:
@@ -24,8 +37,14 @@ async def run_daemon(*, home: Path | None = None, passphrase: str) -> None:
 
     cfg = load_config()
     vault = await unlock_vault(home=cfg.coral_home, passphrase=passphrase)
+    await _provision_cli_token(cfg=cfg, vault=vault)
 
     challenge = generate_challenge()
+    handshake_state = HandshakeState(
+        challenge=challenge,
+        rate_limit_per_minute=cfg.handshake_rate_limit_per_minute,
+    )
+
     vault_location = cfg.vault_path
     api_base = f"http://{cfg.http_host}:{cfg.http_port}"
 
@@ -69,24 +88,34 @@ async def run_daemon(*, home: Path | None = None, passphrase: str) -> None:
         if hasattr(signal, "SIGTERM"):
             signal.signal(signal.SIGTERM, _fallback_sig)
 
-    http_app = build_http_app()
+    if cfg.http_host != "127.0.0.1":
+        raise RuntimeError(
+            "Coral refuses to bind the HTTP API to anything other than 127.0.0.1 "
+            "(spec §6.2 T2). Override is intentionally absent."
+        )
+
+    http_app = build_http_app(vault=vault, handshake_state=handshake_state, config=cfg)
     http_server = uvicorn.Server(
         uvicorn.Config(
             http_app,
-            host=cfg.http_host,
+            host="127.0.0.1",
             port=cfg.http_port,
             log_level="info",
             loop="asyncio",
+            timeout_graceful_shutdown=5,
         )
     )
-    mcp = build_mcp_server(http_host=cfg.http_host, http_port=cfg.mcp_http_port)
+
+    set_runtime(MCPRuntime(vault=vault, agent_name="mcp-http"))
+    mcp = build_mcp_server(http_host="127.0.0.1", http_port=cfg.mcp_http_port)
     mcp_server = uvicorn.Server(
         uvicorn.Config(
             mcp.streamable_http_app(),
-            host=cfg.http_host,
+            host="127.0.0.1",
             port=cfg.mcp_http_port,
             log_level="info",
             loop="asyncio",
+            timeout_graceful_shutdown=5,
         )
     )
 
@@ -99,8 +128,11 @@ async def run_daemon(*, home: Path | None = None, passphrase: str) -> None:
         http_server.should_exit = True
         mcp_server.should_exit = True
         await asyncio.gather(http_task, mcp_task, return_exceptions=True)
+        set_runtime(None)
         await vault.close()
         pid_path.unlink(missing_ok=True)
+        with contextlib.suppress(OSError):
+            cfg.cli_token_path.unlink(missing_ok=True)
 
 
 def run_daemon_blocking(*, home: Path | None = None, passphrase: str) -> None:

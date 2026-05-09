@@ -86,9 +86,6 @@ async def test_e2e_capture_open_drive_close(tmp_path) -> None:
                 "PYTHONUNBUFFERED": "1",
             }
         )
-        # ensure the subprocess can find the pre-installed chromium
-        env.setdefault("PLAYWRIGHT_BROWSERS_PATH", "/opt/pw-browsers")
-
         server = StdioServerParameters(
             command=sys.executable,
             args=["-m", "coral", "mcp-stdio", "--agent-name", "e2e-pytest"],

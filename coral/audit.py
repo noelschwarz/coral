@@ -1,26 +1,41 @@
-"""Append-only audit log (spec §3.1 Daemon + §4.1 ``audit_log`` table).
+"""Append-only audit log helpers (spec §3.1, §4.1).
 
-Records agent identity, Coral session identifiers, policy decisions, and lifecycle
-events. Writes must be serialized with vault updates (spec §7.3).
+Most audit writes happen inline in the HTTP/MCP/sessions code paths so the
+caller can correlate them with their own state. These module-level helpers
+exist for code paths that don't already hold a vault reference.
 """
 
 from __future__ import annotations
 
+import json
+import time
 from typing import Any
+
+from coral.models import AuditEntry
+from coral.vault import Vault
 
 
 async def append_event(
+    vault: Vault,
     *,
     event_type: str,
     detail: dict[str, Any],
-    session_id: str | None,
-    agent_id: str | None,
-    origin: str | None,
-) -> int:
-    """Insert a new audit row and return its autoincrement id."""
-    raise NotImplementedError("Audit persistence is wired in week 2 (spec §9).")
+    session_id: str | None = None,
+    agent_id: str | None = None,
+    origin: str | None = None,
+) -> None:
+    """Insert a new audit row. Caller owns the vault handle."""
+    entry = AuditEntry(
+        timestamp=int(time.time()),
+        session_id=session_id,
+        agent_id=agent_id,
+        event_type=event_type,
+        origin=origin,
+        detail=json.dumps(detail, separators=(",", ":"), sort_keys=True),
+    )
+    await vault.insert_audit(entry)
 
 
-async def fetch_since(*, since_ts: int, limit: int) -> list[dict[str, Any]]:
+async def fetch_since(vault: Vault, *, since_ts: int | None, limit: int) -> list[AuditEntry]:
     """Return audit rows with ``timestamp >= since_ts`` (HTTP ``GET /audit``)."""
-    raise NotImplementedError("Audit querying lands with the HTTP API (spec §5.1).")
+    return await vault.query_audit(since=since_ts, limit=limit)

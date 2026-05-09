@@ -15,13 +15,16 @@ jobs:
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true
-      - name: Sync + lint + typecheck + tests
+      - name: Sync
+        run: uv sync --all-extras
+      - name: Install Playwright Chromium (cached on rerun)
+        run: uv run playwright install chromium --with-deps
+      - name: Lint + typecheck + tests
         run: |
-          uv sync --all-extras
           uv run ruff check coral tests
           uv run ruff format --check coral tests
           uv run pyright
-          uv run pytest
+          uv run pytest --cov=coral
 
   extension:
     runs-on: ubuntu-latest

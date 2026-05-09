@@ -64,10 +64,10 @@ async def test_coral_mcp_stdio_round_trip(tmp_path) -> None:
         assert not list_res.isError
         assert list_res.structuredContent == {"sessions": []}
 
-        stub_res = await session.call_tool("coral_open_session", {})
-        assert stub_res.isError, "coral_open_session must raise until week 2"
+        stub_res = await session.call_tool("coral_check_action", {})
+        assert stub_res.isError, "coral_check_action must raise until week 3"
         text_blocks = [getattr(c, "text", "") for c in stub_res.content if hasattr(c, "text")]
-        assert any("week 2" in t for t in text_blocks)
+        assert any("week 3" in t for t in text_blocks)
 
     # After the stdio session closes, reopen the vault directly and verify the audit
     # rows attribute the calls to the MCP client's clientInfo.name. mcp/python-sdk

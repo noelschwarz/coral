@@ -21,6 +21,7 @@ from coral.mcp_server import (
     build_mcp_server,
     set_runtime,
 )
+from coral.sessions import SessionServer
 from coral.vault import Vault, unlock_vault
 
 
@@ -111,7 +112,11 @@ async def run_daemon(*, home: Path | None = None, passphrase: str) -> None:
         )
     )
 
-    set_runtime(MCPRuntime(vault=vault, agent_name="mcp-http"))
+    session_server = SessionServer(
+        vault=vault,
+        max_duration_minutes=cfg.session_max_duration_minutes,
+    )
+    set_runtime(MCPRuntime(vault=vault, agent_name="mcp-http", session_server=session_server))
     mcp = build_mcp_server(http_host="127.0.0.1", http_port=cfg.mcp_http_port)
     mcp_server = uvicorn.Server(
         uvicorn.Config(
@@ -133,6 +138,8 @@ async def run_daemon(*, home: Path | None = None, passphrase: str) -> None:
         http_server.should_exit = True
         mcp_server.should_exit = True
         await asyncio.gather(http_task, mcp_task, return_exceptions=True)
+        with contextlib.suppress(Exception):
+            await session_server.shutdown()
         set_runtime(None)
         await vault.close()
         pid_path.unlink(missing_ok=True)

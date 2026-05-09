@@ -49,6 +49,41 @@ The daemon emits structured JSON events to stderr (separate from the audit log
 in the vault). Filter with `CORAL_DIAG_LEVEL=debug|info|warn|error` (default
 `info`).
 
+### End-to-end via MCP
+
+Once a session is captured (via the extension or a direct `POST /sessions`),
+any MCP-speaking agent can drive it:
+
+```python
+from mcp.client.stdio import StdioServerParameters, stdio_client
+from mcp import ClientSession
+from playwright.async_api import async_playwright
+
+server = StdioServerParameters(command="coral", args=["mcp-stdio"])
+async with stdio_client(server) as (read, write), ClientSession(read, write) as s:
+    await s.initialize()
+    res = await s.call_tool(
+        "coral_open_session",
+        {"session_id": "<uuid from coral list>", "purpose": "read my feed"},
+    )
+    cdp_url = res.structuredContent["cdp_url"]
+    handle  = res.structuredContent["session_handle"]
+
+    async with async_playwright() as pw:
+        browser = await pw.chromium.connect_over_cdp(cdp_url)
+        ctx = browser.contexts[0]              # restored, isolated, authenticated
+        page = await ctx.new_page()
+        await page.goto("https://www.linkedin.com/feed/")
+        # ... drive the agent ...
+        await browser.close()
+
+    await s.call_tool("coral_close_session", {"session_handle": handle})
+```
+
+Each `coral_open_session` launches its own Chromium process for isolation
+(ADR-010). The agent gets a CDP URL, connects with any CDP client (Playwright,
+Puppeteer, raw CDP), and drives the browser. Every navigation is audited.
+
 Environment variables:
 
 - `CORAL_HOME` — data directory (default `~/.coral`).

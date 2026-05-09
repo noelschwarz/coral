@@ -45,6 +45,7 @@ class MCPRuntime:
 
     vault: Vault
     agent_name: str = "mcp-client"
+    session_server: Any = None  # coral.sessions.SessionServer; Any avoids cycle
 
 
 _runtime_state: MCPRuntime | None = None
@@ -130,7 +131,9 @@ async def _coral_list_sessions(ctx: Context[Any, Any, Any] | None = None) -> dic
     return {"sessions": sessions}
 
 
-def _not_implemented(tool_name: str) -> Callable[..., Awaitable[dict[str, Any]]]:
+def _not_implemented(
+    tool_name: str, *, message: str = WEEK2_MESSAGE
+) -> Callable[..., Awaitable[dict[str, Any]]]:
     async def _stub(
         ctx: Context[Any, Any, Any] | None = None,
         arguments: dict[str, Any] | None = None,
@@ -142,10 +145,59 @@ def _not_implemented(tool_name: str) -> Callable[..., Awaitable[dict[str, Any]]]
             detail={"tool_name": tool_name},
             agent_id=agent_id,
         )
-        raise NotImplementedError(WEEK2_MESSAGE.format(tool=tool_name))
+        raise NotImplementedError(message.format(tool=tool_name))
 
     _stub.__name__ = tool_name
     return _stub
+
+
+WEEK3_MESSAGE: str = (
+    "{tool} is registered but not yet implemented; the implementation lands in "
+    "Coral week 3 (policy engine + review flow)."
+)
+
+
+async def _coral_open_session(
+    session_id: str,
+    purpose: str,
+    ctx: Context[Any, Any, Any] | None = None,
+) -> dict[str, Any]:
+    """Open an authenticated browser context (spec §5.2)."""
+    from coral.sessions import (
+        SessionHandleNotFoundError,
+        SessionNotActiveError,
+        SessionNotFoundError,
+        SessionServerError,
+    )
+
+    rt = _runtime()
+    if rt.session_server is None:
+        raise RuntimeError("session server is not configured")
+    agent_id = _agent_from_ctx(ctx)
+    try:
+        session = await rt.session_server.open(
+            session_id=session_id, agent_id=agent_id, purpose=purpose
+        )
+    except SessionNotFoundError as exc:
+        raise ValueError(f"session_not_found: {exc}") from exc
+    except SessionNotActiveError as exc:
+        raise ValueError(f"session_not_active: {exc}") from exc
+    except (SessionHandleNotFoundError, SessionServerError) as exc:
+        raise RuntimeError(str(exc)) from exc
+    return session.to_open_response()
+
+
+async def _coral_close_session(
+    session_handle: str,
+    ctx: Context[Any, Any, Any] | None = None,
+) -> dict[str, Any]:
+    """Tear down an open browser context."""
+    rt = _runtime()
+    if rt.session_server is None:
+        raise RuntimeError("session server is not configured")
+    _ = _agent_from_ctx(ctx)
+    await rt.session_server.close(session_handle, reason="agent_closed")
+    return {"closed": True, "reason": "agent_closed"}
 
 
 def register_tools(mcp: FastMCP) -> None:
@@ -160,32 +212,31 @@ def register_tools(mcp: FastMCP) -> None:
         ),
     )
     mcp.add_tool(
-        _not_implemented("coral_open_session"),
+        _coral_open_session,
         name="coral_open_session",
         description=(
             "Open an authenticated browser context restored from a captured session. "
-            "Returns a CDP URL the agent can drive. Implementation in week 2."
+            "Returns a CDP URL the agent can drive."
         ),
     )
     mcp.add_tool(
-        _not_implemented("coral_close_session"),
+        _coral_close_session,
         name="coral_close_session",
-        description="Close an open session context. Implementation in week 2.",
+        description="Close an open session context.",
     )
     mcp.add_tool(
-        _not_implemented("coral_check_action"),
+        _not_implemented("coral_check_action", message=WEEK3_MESSAGE),
         name="coral_check_action",
         description=(
             "Evaluate whether an action is allowed under the session's policy. "
-            "Implementation in week 2 (engine in week 3)."
+            "Implementation in week 3."
         ),
     )
     mcp.add_tool(
-        _not_implemented("coral_request_review"),
+        _not_implemented("coral_request_review", message=WEEK3_MESSAGE),
         name="coral_request_review",
         description=(
-            "Request operator review for a policy-flagged action. Implementation in "
-            "week 2 (review UX in week 3)."
+            "Request operator review for a policy-flagged action. Implementation in week 3."
         ),
     )
 
@@ -285,15 +336,27 @@ def build_authed_mcp_http_app(mcp: FastMCP, *, vault: Vault) -> ASGIApp:
     return MCPBearerAuth(mcp.streamable_http_app(), vault=vault)
 
 
-async def run_mcp_stdio(*, vault: Vault, agent_name: str = "stdio") -> None:
+async def run_mcp_stdio(
+    *,
+    vault: Vault,
+    agent_name: str = "stdio",
+    session_max_duration_minutes: int = 60,
+) -> None:
     """Run Coral MCP with stdio transport.
 
-    The caller provides a vault that the tools will read/write through. This is
-    the same vault the daemon uses when ``coral mcp-stdio`` is launched in-process.
+    The caller provides a vault that the tools will read/write through. A fresh
+    ``SessionServer`` is instantiated so ``coral_open_session`` works the same
+    way it does inside the long-running daemon.
     """
-    set_runtime(MCPRuntime(vault=vault, agent_name=agent_name))
+    from coral.sessions import SessionServer
+
+    session_server = SessionServer(vault=vault, max_duration_minutes=session_max_duration_minutes)
+    set_runtime(MCPRuntime(vault=vault, agent_name=agent_name, session_server=session_server))
     try:
         mcp = build_mcp_server()
         await mcp.run_stdio_async()
     finally:
-        set_runtime(None)
+        try:
+            await session_server.shutdown()
+        finally:
+            set_runtime(None)

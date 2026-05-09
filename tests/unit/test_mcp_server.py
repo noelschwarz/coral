@@ -4,14 +4,16 @@ from __future__ import annotations
 
 from collections.abc import AsyncIterator
 
+import httpx
 import pytest
 from starlette.testclient import TestClient
 
-from coral.crypto import TEST_PARAMS
+from coral.crypto import TEST_PARAMS, generate_token
 from coral.mcp_server import (
     MCPRuntime,
     _coral_list_sessions,
     _not_implemented,
+    build_authed_mcp_http_app,
     build_mcp_server,
     set_runtime,
 )
@@ -76,6 +78,51 @@ async def test_unimplemented_tool_raises_with_clear_message(runtime_vault: Vault
         await stub(arguments={"session_id": "x"})
     assert "week 2" in str(exc.value)
     assert "coral_open_session" in str(exc.value)
+
+
+async def test_authed_mcp_http_rejects_unauthed(runtime_vault: Vault) -> None:
+    mcp = build_mcp_server()
+    app = build_authed_mcp_http_app(mcp, vault=runtime_vault)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as c:
+        r = await c.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+            headers={"Accept": "application/json", "Content-Type": "application/json"},
+        )
+    assert r.status_code == 401
+    assert r.json()["error"] == "missing_authorization"
+
+
+async def test_authed_mcp_http_rejects_unknown_token(runtime_vault: Vault) -> None:
+    mcp = build_mcp_server()
+    app = build_authed_mcp_http_app(mcp, vault=runtime_vault)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as c:
+        r = await c.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {generate_token()}",
+            },
+        )
+    assert r.status_code == 401
+    assert r.json()["error"] == "invalid_token"
+    rows = await runtime_vault.query_audit(since=None, limit=10)
+    assert any(r.event_type == "auth.failed" and "mcp-http" in r.detail for r in rows)
+
+
+# Note: the success-path test for the MCP HTTP middleware is intentionally absent.
+# FastMCP's streamable_http_app needs Starlette's lifespan to initialize its session
+# manager (TestClient handles that), but the bearer middleware needs an awaitable
+# vault — and the vault's writer task is bound to whichever event loop opened it.
+# Mixing a sync TestClient (which runs requests on a portal loop) with an async-loop-
+# bound vault is the same cross-loop deadlock that caused the original test_auth.py
+# hang. The middleware's success branch is a single ``await call_next(request)`` with
+# no Coral-specific logic; the auth-rejection paths above + the stdio integration
+# test (which exercises the same FastMCP) cover everything material.
 
 
 def test_mcp_streamable_http_initialize() -> None:

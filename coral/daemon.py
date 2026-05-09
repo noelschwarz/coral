@@ -15,7 +15,12 @@ import uvicorn
 from coral.config import Config, load_config
 from coral.crypto import generate_challenge, generate_token, hash_token
 from coral.http_api import HandshakeState, build_http_app
-from coral.mcp_server import MCPRuntime, build_mcp_server, set_runtime
+from coral.mcp_server import (
+    MCPRuntime,
+    build_authed_mcp_http_app,
+    build_mcp_server,
+    set_runtime,
+)
 from coral.vault import Vault, unlock_vault
 
 
@@ -110,7 +115,7 @@ async def run_daemon(*, home: Path | None = None, passphrase: str) -> None:
     mcp = build_mcp_server(http_host="127.0.0.1", http_port=cfg.mcp_http_port)
     mcp_server = uvicorn.Server(
         uvicorn.Config(
-            mcp.streamable_http_app(),
+            build_authed_mcp_http_app(mcp, vault=vault),
             host="127.0.0.1",
             port=cfg.mcp_http_port,
             log_level="info",

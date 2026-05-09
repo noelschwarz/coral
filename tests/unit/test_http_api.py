@@ -137,6 +137,49 @@ async def test_post_session_valid(fresh_vault: Vault) -> None:
     assert data["expires_at"] is not None
 
 
+async def test_post_session_409_when_active_origin_exists(fresh_vault: Vault) -> None:
+    challenge = "ABCD-EFGH-JKLM-NPQR"
+    client, _ = await _client(fresh_vault, challenge=challenge)
+    async with client:
+        token = await _bootstrap_token(client, challenge)
+        body = {
+            "origin": "https://conflict.example",
+            "state": {"version": 1, "cookies": []},
+        }
+        first = await client.post(
+            "/sessions", json=body, headers={"Authorization": f"Bearer {token}"}
+        )
+        assert first.status_code == 200, first.text
+        second = await client.post(
+            "/sessions", json=body, headers={"Authorization": f"Bearer {token}"}
+        )
+    assert second.status_code == 409
+    assert second.json()["error"] == "active_session_exists_for_origin"
+
+
+async def test_post_session_after_revoke_succeeds(fresh_vault: Vault) -> None:
+    challenge = "ABCD-EFGH-JKLM-NPQR"
+    client, _ = await _client(fresh_vault, challenge=challenge)
+    async with client:
+        token = await _bootstrap_token(client, challenge)
+        body = {
+            "origin": "https://reuse.example",
+            "state": {"version": 1, "cookies": []},
+        }
+        first = await client.post(
+            "/sessions", json=body, headers={"Authorization": f"Bearer {token}"}
+        )
+        sid = first.json()["session_id"]
+        del_res = await client.delete(
+            f"/sessions/{sid}", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert del_res.status_code == 204
+        second = await client.post(
+            "/sessions", json=body, headers={"Authorization": f"Bearer {token}"}
+        )
+    assert second.status_code == 200
+
+
 async def test_post_session_malformed_origin(fresh_vault: Vault) -> None:
     challenge = "ABCD-EFGH-JKLM-NPQR"
     client, _ = await _client(fresh_vault, challenge=challenge)

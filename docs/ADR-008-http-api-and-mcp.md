@@ -81,6 +81,21 @@ Open questions resolved during this session (Track B handoff note, items 1-5):
 - The vault is plumbed to MCP tool handlers via a module-level `MCPRuntime`
   handle set at daemon startup. Tools that mutate state always go through the
   vault's writer queue (no direct sqlite3 calls from MCP land).
+- **Agent identity** flows from MCP's `initialize` `clientInfo.name` via the
+  FastMCP `Context` object, which tools accept as their first parameter.
+  `_agent_from_ctx` reads `ctx.session.client_params.clientInfo.name` and falls
+  back to `MCPRuntime.agent_name` only if the client info isn't reachable. Every
+  audit row written from MCP land threads this name into `audit_log.agent_id`.
+
+### MCP HTTP bearer auth
+
+- `build_authed_mcp_http_app(mcp, vault)` wraps `mcp.streamable_http_app()` in a
+  `MCPBearerAuth` Starlette middleware that mirrors the HTTP API's
+  `require_auth`: identical token validation, identical 401 shape, identical
+  audit trail. Failure rows record `transport: "mcp-http"` so the two surfaces
+  are distinguishable in `audit_log.detail`. The daemon mounts the wrapped app on
+  `127.0.0.1:8766`. Localhost-only binding plus bearer auth covers T2 for the
+  MCP transport.
 
 ### Stdio bridge
 
@@ -106,13 +121,20 @@ Open questions resolved during this session (Track B handoff note, items 1-5):
 
 - No token revocation surface (`DELETE /tokens/{id}`); tokens expire on their own.
   Adding revocation is straightforward and is queued post-v1.
-- MCP HTTP transport runs without bearer auth on the SSE endpoint for v1. It is
-  localhost-only (T2 covers binding); the extension does not use this transport.
-  Agents wanting authenticated MCP HTTP should wait for v1.x.
 - The handshake rate limiter is in-process and resets on daemon restart. A
   legitimate user retrying many times will hit the limit until they restart the
   daemon — that's the correct UX (forces a fresh challenge), but it's a sharp
   edge worth knowing about.
+- `coral mcp-stdio` opens its own copy of the vault (passphrase via
+  `CORAL_PASSPHRASE` or interactive prompt) instead of proxying stdio to a
+  running daemon over HTTP. The handoff explicitly authorized this duplication
+  fallback for v1; the bridge variant can be added later without touching the
+  tool implementations because both paths share the same `MCPRuntime`.
+- The `UNIQUE(origin)` constraint on `sessions` is enforced at the application
+  layer (409 if any active session matches) rather than as a DB constraint, so
+  multiple revoked sessions for the same origin can coexist. This matches the
+  spec's intent ("only one active per origin") while keeping the schema friendly
+  to history/replay use cases.
 
 ## When to revisit
 

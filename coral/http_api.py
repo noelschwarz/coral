@@ -203,6 +203,13 @@ async def capture_session(
     vault: Vault = Depends(get_vault),
     auth: AuthContext = Depends(require_auth),
 ) -> CaptureSessionResponse:
+    existing = await vault.list_sessions()
+    if any(s.origin == body.origin and s.status == "active" for s in existing):
+        raise HTTPException(
+            status_code=409,
+            detail="active_session_exists_for_origin",
+        )
+
     state_dict: dict[str, Any] = body.state.model_dump(mode="json")
     cookies_raw_obj: Any = state_dict.get("cookies") or []
     cookie_dicts: list[dict[str, Any]] = []

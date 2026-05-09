@@ -369,6 +369,10 @@ class Vault:
             expires_at=int(row[4]),
         )
 
+    async def touch_token_last_used(self, token_hash: str, now: int) -> None:
+        sql = "UPDATE api_tokens SET last_used_at = ? WHERE token_hash = ?"
+        await self._enqueue_write(sql, (now, token_hash))
+
     async def list_tokens(self) -> list[TokenRecord]:
         conn = self._require_conn()
 

@@ -561,6 +561,66 @@ def _panic_via_vault(coral_dir: Path) -> None:
     asyncio.run(_run())
 
 
+@app.command("list")
+def list_command(
+    home: Path | None = typer.Option(None, "--home", help="Coral data directory."),
+) -> None:
+    """List captured sessions via the running daemon."""
+    coral_dir = _home(home)
+    cfg = load_config()
+    if not cfg.daemon_pid_file.is_file():
+        typer.secho("Daemon not running. Start it with `coral start`.", err=True)
+        raise typer.Exit(code=1)
+    cli_token = _read_cli_token(coral_dir)
+    if cli_token is None:
+        typer.secho("Bridge token missing. Restart `coral start`.", err=True)
+        raise typer.Exit(code=1)
+    base = f"http://{cfg.http_host}:{cfg.http_port}"
+    code, payload = _http_get(f"{base}/sessions", token=cli_token)
+    rows = _as_list_of_dicts(payload.get("sessions"))
+    if code != 200 or rows is None:
+        typer.secho(f"list failed (status={code})", err=True)
+        raise typer.Exit(code=1)
+    if not rows:
+        typer.echo("(no sessions captured)")
+        return
+    for r in rows:
+        sid = r.get("id", "?")
+        origin = r.get("origin", "?")
+        status_field = r.get("status", "?")
+        label = r.get("label") or ""
+        typer.echo(f"{sid}  {status_field:<8} {origin}  {label}")
+
+
+@app.command("revoke")
+def revoke(
+    site: str = typer.Argument(..., help="Origin (e.g. https://example.com) to revoke."),
+    home: Path | None = typer.Option(None, "--home", help="Coral data directory."),
+) -> None:
+    """Revoke every session matching ``site`` (origin)."""
+    coral_dir = _home(home)
+    cfg = load_config()
+    cli_token = _read_cli_token(coral_dir)
+    if cli_token is None or not cfg.daemon_pid_file.is_file():
+        typer.secho("Daemon not running. Start it with `coral start`.", err=True)
+        raise typer.Exit(code=1)
+    base = f"http://{cfg.http_host}:{cfg.http_port}"
+    _, payload = _http_get(f"{base}/sessions", token=cli_token)
+    rows = _as_list_of_dicts(payload.get("sessions")) or []
+    matches = [r for r in rows if r.get("origin") == site and r.get("status") == "active"]
+    if not matches:
+        typer.secho(f"No active sessions for {site}.", fg=typer.colors.YELLOW)
+        raise typer.Exit(code=1)
+    for r in matches:
+        sid = r.get("id")
+        if isinstance(sid, str):
+            code = _http_delete(f"{base}/sessions/{sid}", token=cli_token)
+            if code == 204:
+                typer.echo(f"revoked {sid}")
+            else:
+                typer.secho(f"failed to revoke {sid} (status={code})", err=True)
+
+
 @app.command("policy")
 def policy(site: str = typer.Argument(..., help="Origin to inspect/edit (placeholder).")) -> None:
     """View or edit per-site policy (week 3)."""

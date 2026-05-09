@@ -399,3 +399,60 @@ async def test_token_directly_inserted_works(fresh_vault: Vault) -> None:
     async with client:
         r = await client.get("/sessions", headers={"Authorization": f"Bearer {raw}"})
     assert r.status_code == 200
+
+
+# Token refresh + revocation surface ---------------------------------------
+
+
+async def test_token_refresh_returns_new_token_revokes_old(fresh_vault: Vault) -> None:
+    challenge = "ABCD-EFGH-JKLM-NPQR"
+    client, _ = await _client(fresh_vault, challenge=challenge)
+    async with client:
+        old = await _bootstrap_token(client, challenge)
+        refreshed = await client.post("/auth/refresh", headers={"Authorization": f"Bearer {old}"})
+        assert refreshed.status_code == 200
+        new_token = refreshed.json()["token"]
+        assert new_token != old
+        # New token works
+        ok = await client.get("/sessions", headers={"Authorization": f"Bearer {new_token}"})
+        assert ok.status_code == 200
+        # Old token does not
+        gone = await client.get("/sessions", headers={"Authorization": f"Bearer {old}"})
+    assert gone.status_code == 401
+
+
+async def test_token_list_returns_active_tokens(fresh_vault: Vault) -> None:
+    challenge = "ABCD-EFGH-JKLM-NPQR"
+    client, _ = await _client(fresh_vault, challenge=challenge)
+    async with client:
+        token = await _bootstrap_token(client, challenge)
+        r = await client.get("/tokens", headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 200
+    assert any(t["name"] == "extension" for t in r.json()["tokens"])
+
+
+async def test_token_revoke_blocks_subsequent_calls(fresh_vault: Vault) -> None:
+    challenge = "ABCD-EFGH-JKLM-NPQR"
+    client, _ = await _client(fresh_vault, challenge=challenge)
+    async with client:
+        token = await _bootstrap_token(client, challenge)
+        listed = await client.get("/tokens", headers={"Authorization": f"Bearer {token}"})
+        my_hash = next(t["token_hash"] for t in listed.json()["tokens"])
+        del_res = await client.delete(
+            f"/tokens/{my_hash}", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert del_res.status_code == 204
+        gone = await client.get("/sessions", headers={"Authorization": f"Bearer {token}"})
+    assert gone.status_code == 401
+
+
+async def test_token_revoke_unknown_404(fresh_vault: Vault) -> None:
+    challenge = "ABCD-EFGH-JKLM-NPQR"
+    client, _ = await _client(fresh_vault, challenge=challenge)
+    async with client:
+        token = await _bootstrap_token(client, challenge)
+        r = await client.delete(
+            "/tokens/not-a-real-hash-aaaaaa",
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    assert r.status_code == 404

@@ -373,6 +373,10 @@ class Vault:
         sql = "UPDATE api_tokens SET last_used_at = ? WHERE token_hash = ?"
         await self._enqueue_write(sql, (now, token_hash))
 
+    async def delete_token(self, token_hash: str) -> None:
+        sql = "DELETE FROM api_tokens WHERE token_hash = ?"
+        await self._enqueue_write(sql, (token_hash,))
+
     async def list_tokens(self) -> list[TokenRecord]:
         conn = self._require_conn()
 

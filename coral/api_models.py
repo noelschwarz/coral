@@ -24,6 +24,24 @@ class HandshakeResponse(BaseModel):
     expires_at: int
 
 
+class TokenRefreshResponse(BaseModel):
+    token: str
+    expires_at: int
+    previous_revoked: bool
+
+
+class TokenInfo(BaseModel):
+    token_hash: str
+    name: str
+    created_at: int
+    last_used_at: int | None
+    expires_at: int
+
+
+class TokenListResponse(BaseModel):
+    tokens: list[TokenInfo]
+
+
 class CookieIn(BaseModel):
     """A cookie shape sufficient for week-1 capture (spec §4.2)."""
 

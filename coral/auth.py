@@ -13,6 +13,7 @@ from dataclasses import dataclass
 
 from fastapi import Depends, HTTPException, Request, status
 
+from coral import diag
 from coral.crypto import hash_token
 from coral.models import AuditEntry
 from coral.vault import Vault
@@ -39,6 +40,7 @@ def get_vault(request: Request) -> Vault:
 
 
 async def _record_auth_failure(vault: Vault, reason: str) -> None:
+    diag.warn("auth.rejected", reason=reason, transport="http")
     entry = AuditEntry(
         timestamp=int(time.time()),
         session_id=None,

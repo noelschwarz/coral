@@ -28,6 +28,26 @@ uv run coral stop                  # if you run start in the background with too
 The challenge is single-use: the first successful `/auth/handshake` consumes it.
 Restart the daemon to mint a new challenge. Tokens default to 24h for extension
 clients and 30 days for the CLI bridge token (configurable via `Config`).
+Long-lived clients should call `POST /auth/refresh` before expiry instead of
+re-pairing through the challenge.
+
+### Daily-use commands
+
+```bash
+uv run coral status                # daemon state, active sessions, connected agents
+uv run coral audit --since 0 --limit 50
+uv run coral audit --event-type session.captured
+uv run coral panic --yes           # revoke everything + stop daemon (trust recovery)
+```
+
+`coral status` and `coral audit` use the bridge token in `$CORAL_HOME/cli.token`,
+written automatically when `coral start` runs.
+
+### Operational logging
+
+The daemon emits structured JSON events to stderr (separate from the audit log
+in the vault). Filter with `CORAL_DIAG_LEVEL=debug|info|warn|error` (default
+`info`).
 
 Environment variables:
 

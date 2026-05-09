@@ -27,6 +27,7 @@ from starlette.requests import Request
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp
 
+from coral import diag
 from coral.crypto import hash_token
 from coral.models import AuditEntry
 from coral.vault import Vault
@@ -227,6 +228,7 @@ class MCPBearerAuth(BaseHTTPMiddleware):
         self._vault = vault
 
     async def _audit_failure(self, reason: str) -> None:
+        diag.warn("auth.rejected", reason=reason, transport="mcp-http")
         entry = AuditEntry(
             timestamp=int(time.time()),
             session_id=None,

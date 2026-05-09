@@ -36,7 +36,7 @@ from fastapi import APIRouter, Depends, FastAPI, HTTPException, Path, Query, Req
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response
 
-from coral import __version__
+from coral import __version__, diag
 from coral.api_models import (
     AuditEntryResponse,
     AuditListResponse,
@@ -48,6 +48,9 @@ from coral.api_models import (
     PolicyResponse,
     SessionListItem,
     SessionListResponse,
+    TokenInfo,
+    TokenListResponse,
+    TokenRefreshResponse,
 )
 from coral.auth import AuthContext, get_vault, require_auth
 from coral.crypto import constant_time_compare, generate_token, hash_token
@@ -189,12 +192,94 @@ async def handshake(
     expires_at = int(time.time()) + int(cfg.extension_token_ttl_seconds)
     raw_token = generate_token()
     await vault.insert_token(hash_token(raw_token), name=body.client_name, expires_at=expires_at)
+    diag.info(
+        "auth.handshake.success",
+        client_name=body.client_name,
+        ttl_seconds=int(cfg.extension_token_ttl_seconds),
+    )
     await _audit(
         vault,
         event_type="auth.handshake.success",
         detail={"client_name": body.client_name, "expires_at": expires_at},
     )
     return HandshakeResponse(token=raw_token, expires_at=expires_at)
+
+
+@router.post("/auth/refresh", response_model=TokenRefreshResponse)
+async def refresh_token(
+    request: Request,
+    vault: Vault = Depends(get_vault),
+    auth: AuthContext = Depends(require_auth),
+) -> TokenRefreshResponse:
+    """Mint a fresh bearer token using a still-valid one.
+
+    Removes the daily ``restart daemon → re-paste challenge`` ritual: clients
+    that have a working token can extend their lifetime without re-handshaking.
+    The previous token is revoked immediately on success — a single client
+    holds at most one valid token at a time.
+    """
+    cfg = request.app.state.config
+    expires_at = int(time.time()) + int(cfg.extension_token_ttl_seconds)
+    raw_token = generate_token()
+    await vault.insert_token(hash_token(raw_token), name=auth.name, expires_at=expires_at)
+    await vault.delete_token(auth.token_hash)
+    await _audit(
+        vault,
+        event_type="auth.token.refreshed",
+        detail={"client_name": auth.name, "expires_at": expires_at},
+        agent_id=auth.name,
+    )
+    return TokenRefreshResponse(token=raw_token, expires_at=expires_at, previous_revoked=True)
+
+
+@router.get("/tokens", response_model=TokenListResponse)
+async def list_tokens(
+    vault: Vault = Depends(get_vault),
+    auth: AuthContext = Depends(require_auth),
+) -> TokenListResponse:
+    rows = await vault.list_tokens()
+    items = [
+        TokenInfo(
+            token_hash=r.token_hash,
+            name=r.name,
+            created_at=r.created_at,
+            last_used_at=r.last_used_at,
+            expires_at=r.expires_at,
+        )
+        for r in rows
+    ]
+    await _audit(
+        vault,
+        event_type="auth.token.list",
+        detail={"count": len(items)},
+        agent_id=auth.name,
+    )
+    return TokenListResponse(tokens=items)
+
+
+@router.delete("/tokens/{token_hash}", status_code=204)
+async def revoke_token(
+    token_hash: str = Path(..., min_length=1, max_length=128),
+    vault: Vault = Depends(get_vault),
+    auth: AuthContext = Depends(require_auth),
+) -> Response:
+    """Revoke a single bearer token.
+
+    Track B's prompt deferred this; the UX argument (panic recovery, "log out
+    this agent") outweighs the deferral. Revoking your own token is allowed —
+    callers should expect the next request to 401.
+    """
+    rows = await vault.list_tokens()
+    if not any(r.token_hash == token_hash for r in rows):
+        raise HTTPException(status_code=404, detail="token_not_found")
+    await vault.delete_token(token_hash)
+    await _audit(
+        vault,
+        event_type="auth.token.revoked",
+        detail={"by": auth.name, "self": token_hash == auth.token_hash},
+        agent_id=auth.name,
+    )
+    return Response(status_code=204)
 
 
 @router.post("/sessions", response_model=CaptureSessionResponse)

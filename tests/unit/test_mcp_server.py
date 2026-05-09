@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import time
 from collections.abc import AsyncIterator
 
 import httpx
 import pytest
 from starlette.testclient import TestClient
 
-from coral.crypto import TEST_PARAMS, generate_token
+from coral.crypto import TEST_PARAMS, generate_token, hash_token
 from coral.mcp_server import (
     MCPRuntime,
     _coral_list_sessions,
@@ -92,6 +93,51 @@ async def test_authed_mcp_http_rejects_unauthed(runtime_vault: Vault) -> None:
         )
     assert r.status_code == 401
     assert r.json()["error"] == "missing_authorization"
+
+
+async def test_authed_mcp_http_rejects_wrong_scheme(runtime_vault: Vault) -> None:
+    mcp = build_mcp_server()
+    app = build_authed_mcp_http_app(mcp, vault=runtime_vault)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as c:
+        r = await c.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "Authorization": "Basic abc",
+            },
+        )
+    assert r.status_code == 401
+    assert r.json()["error"] == "invalid_authorization_scheme"
+
+
+async def test_authed_mcp_http_rejects_expired_token(runtime_vault: Vault) -> None:
+    raw = generate_token()
+    await runtime_vault.insert_token(
+        hash_token(raw), name="expired", expires_at=int(time.time()) - 60
+    )
+    mcp = build_mcp_server()
+    app = build_authed_mcp_http_app(mcp, vault=runtime_vault)
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as c:
+        r = await c.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}},
+            headers={
+                "Accept": "application/json",
+                "Content-Type": "application/json",
+                "Authorization": f"Bearer {raw}",
+            },
+        )
+    assert r.status_code == 401
+    assert r.json()["error"] == "token_expired"
+    rows = await runtime_vault.query_audit(since=None, limit=10)
+    assert any(
+        r.event_type == "auth.failed" and "token_expired" in r.detail and "mcp-http" in r.detail
+        for r in rows
+    )
 
 
 async def test_authed_mcp_http_rejects_unknown_token(runtime_vault: Vault) -> None:

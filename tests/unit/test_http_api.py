@@ -366,6 +366,30 @@ async def test_token_from_handshake_authenticates_subsequent_calls(
 # Direct token-injection shortcut (no handshake) ----------------------------
 
 
+async def test_audit_write_failure_returns_500(
+    fresh_vault: Vault, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Spec / handoff: audit-write failure is fatal — HTTP 500, no retry, stderr log."""
+    challenge = "ABCD-EFGH-JKLM-NPQR"
+    client, _ = await _client(fresh_vault, challenge=challenge)
+    raw = generate_token()
+    await fresh_vault.insert_token(
+        hash_token(raw), name="extension", expires_at=int(time.time()) + 60
+    )
+
+    async def _explode(*_args, **_kwargs) -> None:
+        raise RuntimeError("simulated audit write failure")
+
+    monkeypatch.setattr(fresh_vault, "insert_audit", _explode)
+
+    async with client:
+        r = await client.get("/sessions", headers={"Authorization": f"Bearer {raw}"})
+    assert r.status_code == 500
+    body = r.json()
+    assert body["error"] == "audit_log_write_failed"
+    assert "fatal" in body["detail"].lower()
+
+
 async def test_token_directly_inserted_works(fresh_vault: Vault) -> None:
     raw = generate_token()
     await fresh_vault.insert_token(

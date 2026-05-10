@@ -1,11 +1,37 @@
-# Placeholder behavior pack for foundations week. Replace with real policy in week 3.
+# LinkedIn default policy (Track E).
+#
+# Caveat: LinkedIn aggressively detects and bans automation. Running agents
+# against this pack risks an account flag or ban. Use at your own risk.
 origin: https://www.linkedin.com
+default_action: deny
 allowed_paths:
-  - /*
-denied_paths: []
-denied_actions: []
+  - /feed/
+  - /feed/*
+  - /in/*
+  - /messaging/
+  - /messaging/*
+  - /jobs/
+  - /jobs/*
+  - /notifications/
+  - /search/*
+denied_paths:
+  - /settings/*
+  - /security/*
+  - /psettings/*
+denied_actions:
+  - send_connection_request_with_note
+  - send_inmail
+  - delete_account
+review_required:
+  - action: send_message
+  - action: post_content
+  - action: send_connection_request
+  - action: react_to_post
+  - action: comment
 rate_limits:
-  actions_per_minute: 30
+  actions_per_minute: 5
+  actions_per_hour: 50
+  navigations_per_minute: 30
 session:
-  max_duration_minutes: 60
+  max_duration_minutes: 30
   kill_on_redirect_to_login: true

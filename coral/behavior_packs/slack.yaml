@@ -1,11 +1,29 @@
-# Placeholder behavior pack (foundations).
+# Slack default policy (Track E).
 origin: https://app.slack.com
+default_action: deny
 allowed_paths:
-  - /*
-denied_paths: []
-denied_actions: []
+  - /
+  - /client/*
+  - /messages/*
+  - /threads/*
+  - /search*
+denied_paths:
+  - /admin/*
+  - /workspace-settings/*
+  - /apps/manage
+denied_actions:
+  - delete_channel
+  - kick_user
+  - leave_workspace
+review_required:
+  - action: send_message
+  - action: send_direct_message
+  - action: post_to_channel
+  - action: invite_user
 rate_limits:
-  actions_per_minute: 30
+  actions_per_minute: 20
+  actions_per_hour: 200
+  navigations_per_minute: 60
 session:
   max_duration_minutes: 60
   kill_on_redirect_to_login: true

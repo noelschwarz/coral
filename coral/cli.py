@@ -129,9 +129,16 @@ def init(
         raise typer.Exit(code=2)
 
     async def _run_init() -> None:
+        from coral.vault import seed_bundled_behavior_packs
+
         ensure_config_file_exists(home=coral_dir)
         vault = await Vault.initialize(coral_dir, passphrase)
-        await vault.close()
+        try:
+            seeded = await seed_bundled_behavior_packs(vault)
+        finally:
+            await vault.close()
+        if seeded:
+            typer.echo(f"Loaded {seeded} bundled behavior packs.")
 
     try:
         asyncio.run(_run_init())
@@ -621,7 +628,176 @@ def revoke(
                 typer.secho(f"failed to revoke {sid} (status={code})", err=True)
 
 
-@app.command("policy")
-def policy(site: str = typer.Argument(..., help="Origin to inspect/edit (placeholder).")) -> None:
-    """View or edit per-site policy (week 3)."""
-    raise NotImplementedError(f"policy command not implemented yet ({site=!r}).")
+def _http_put(url: str, *, token: str, body: dict[str, Any], timeout: float = 5.0) -> int:
+    import json as _json
+    import urllib.error
+    import urllib.request
+
+    req = urllib.request.Request(
+        url,
+        data=_json.dumps(body).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        },
+        method="PUT",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status
+    except urllib.error.HTTPError as e:
+        return e.code
+    except (urllib.error.URLError, TimeoutError):
+        return 0
+
+
+def _http_post(url: str, *, token: str, body: dict[str, Any], timeout: float = 5.0) -> int:
+    import json as _json
+    import urllib.error
+    import urllib.request
+
+    req = urllib.request.Request(
+        url,
+        data=_json.dumps(body).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return resp.status
+    except urllib.error.HTTPError as e:
+        return e.code
+    except (urllib.error.URLError, TimeoutError):
+        return 0
+
+
+def _daemon_token_or_exit(coral_dir: Path) -> tuple[Config, str]:
+    cfg = load_config()
+    if not cfg.daemon_pid_file.is_file():
+        typer.secho("Daemon not running. Start it with `coral start`.", err=True)
+        raise typer.Exit(code=1)
+    token = _read_cli_token(coral_dir)
+    if token is None:
+        typer.secho("Bridge token missing. Restart `coral start`.", err=True)
+        raise typer.Exit(code=1)
+    return cfg, token
+
+
+policy_app = typer.Typer(no_args_is_help=True, help="View or edit per-site policy YAML.")
+app.add_typer(policy_app, name="policy")
+
+
+@policy_app.command("get")
+def policy_get(
+    origin: str = typer.Argument(..., help="Origin e.g. https://example.com"),
+    home: Path | None = typer.Option(None, "--home", help="Coral data directory."),
+) -> None:
+    """Print the YAML policy for ``origin``, or report 'not found'."""
+    coral_dir = _home(home)
+    cfg, token = _daemon_token_or_exit(coral_dir)
+    base = f"http://{cfg.http_host}:{cfg.http_port}"
+    from urllib.parse import quote
+
+    code, payload = _http_get(f"{base}/policies/{quote(origin, safe='')}", token=token)
+    if code == 404:
+        typer.secho(f"No policy stored for {origin}.", fg=typer.colors.YELLOW)
+        raise typer.Exit(code=1)
+    if code != 200:
+        typer.secho(f"policy get failed (status={code})", err=True)
+        raise typer.Exit(code=1)
+    typer.echo(str(payload.get("yaml_body", "")))
+
+
+@policy_app.command("put")
+def policy_put(
+    origin: str = typer.Argument(..., help="Origin e.g. https://example.com"),
+    file: Path = typer.Option(..., "--file", "-f", help="YAML file to upload."),
+    home: Path | None = typer.Option(None, "--home", help="Coral data directory."),
+) -> None:
+    """Upload ``file`` as the per-origin policy YAML."""
+    coral_dir = _home(home)
+    cfg, token = _daemon_token_or_exit(coral_dir)
+    base = f"http://{cfg.http_host}:{cfg.http_port}"
+    from urllib.parse import quote
+
+    code = _http_put(
+        f"{base}/policies/{quote(origin, safe='')}",
+        token=token,
+        body={"yaml_body": file.read_text(encoding="utf-8")},
+    )
+    if code == 204:
+        typer.echo(f"policy updated for {origin}")
+    else:
+        typer.secho(f"policy put failed (status={code})", err=True)
+        raise typer.Exit(code=1)
+
+
+reviews_app = typer.Typer(no_args_is_help=True, help="Inspect and decide pending reviews.")
+app.add_typer(reviews_app, name="reviews")
+
+
+@reviews_app.command("list")
+def reviews_list(
+    home: Path | None = typer.Option(None, "--home", help="Coral data directory."),
+) -> None:
+    coral_dir = _home(home)
+    cfg, token = _daemon_token_or_exit(coral_dir)
+    base = f"http://{cfg.http_host}:{cfg.http_port}"
+    code, payload = _http_get(f"{base}/reviews", token=token)
+    items = _as_list_of_dicts(payload.get("reviews"))
+    if code != 200 or items is None:
+        typer.secho(f"reviews list failed (status={code})", err=True)
+        raise typer.Exit(code=1)
+    if not items:
+        typer.echo("(no pending reviews)")
+        return
+    for r in items:
+        rid = r.get("id", "?")
+        agent = r.get("agent_id") or "—"
+        action = r.get("action_type", "?")
+        detail = r.get("action_detail", "")
+        typer.echo(f"{rid}  agent={agent:<16} action={action:<24} {detail}")
+
+
+def _decide(review_id: str, decision: str, home: Path | None) -> None:
+    coral_dir = _home(home)
+    cfg, token = _daemon_token_or_exit(coral_dir)
+    base = f"http://{cfg.http_host}:{cfg.http_port}"
+    code = _http_post(
+        f"{base}/reviews/{review_id}/decision",
+        token=token,
+        body={"decision": decision},
+    )
+    if code == 204:
+        typer.secho(f"review {review_id} {decision}", fg=typer.colors.GREEN)
+    elif code == 404:
+        typer.secho(f"review {review_id} not found", err=True)
+        raise typer.Exit(code=1)
+    elif code == 409:
+        typer.secho(f"review {review_id} already decided", err=True)
+        raise typer.Exit(code=1)
+    else:
+        typer.secho(f"decision failed (status={code})", err=True)
+        raise typer.Exit(code=1)
+
+
+@app.command("approve")
+def approve_cmd(
+    review_id: str = typer.Argument(..., help="The review_id from `coral reviews list`."),
+    home: Path | None = typer.Option(None, "--home", help="Coral data directory."),
+) -> None:
+    """Approve a pending review."""
+    _decide(review_id, "approved", home)
+
+
+@app.command("deny")
+def deny_cmd(
+    review_id: str = typer.Argument(..., help="The review_id from `coral reviews list`."),
+    home: Path | None = typer.Option(None, "--home", help="Coral data directory."),
+) -> None:
+    """Deny a pending review."""
+    _decide(review_id, "denied", home)

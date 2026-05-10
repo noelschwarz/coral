@@ -105,13 +105,13 @@ def _zero_bytearray(buf: bytearray) -> None:
     buf[:] = b"\x00" * len(buf)
 
 
-def _compress_blob(data: dict[str, Any]) -> bytes:
+def compress_blob(data: dict[str, Any]) -> bytes:
     import gzip
 
     return gzip.compress(json.dumps(data, separators=(",", ":"), sort_keys=True).encode("utf-8"))
 
 
-def _decompress_blob(blob: bytes) -> dict[str, Any]:
+def decompress_blob(blob: bytes) -> dict[str, Any]:
     import gzip
 
     if not blob:
@@ -801,7 +801,7 @@ def _safe_yaml_to_dict(body: str) -> dict[str, Any]:
 
 def make_demo_session_record(*, origin: str = "https://example.com") -> SessionRecord:
     """Construct a session row with a gzipped JSON blob (tests / diagnostics)."""
-    blob = _compress_blob({"version": 1, "origin": origin})
+    blob = compress_blob({"version": 1, "origin": origin})
     now = int(time.time())
     return SessionRecord(
         id=str(uuid.uuid4()),
@@ -827,8 +827,8 @@ __all__ = [
     "VaultIntegrityError",
     "VaultLockedError",
     "VaultMigrationError",
-    "_compress_blob",
-    "_decompress_blob",
+    "compress_blob",
+    "decompress_blob",
     "make_demo_session_record",
     "read_plaintext_meta",
     "unlock_vault",

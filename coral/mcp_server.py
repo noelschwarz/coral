@@ -90,16 +90,19 @@ async def _audit(
     origin: str | None = None,
     agent_id: str | None = None,
 ) -> None:
+    """Thin wrapper over :func:`coral.audit.write_audit_row` that fills in the
+    MCP runtime's default agent name when the caller didn't provide one."""
+    from coral.audit import write_audit_row
+
     rt = _runtime()
-    entry = AuditEntry(
-        timestamp=int(time.time()),
+    await write_audit_row(
+        rt.vault,
+        event_type=event_type,
+        detail=detail,
         session_id=session_id,
         agent_id=agent_id or rt.agent_name,
-        event_type=event_type,
         origin=origin,
-        detail=json.dumps(detail, separators=(",", ":"), sort_keys=True),
     )
-    await rt.vault.insert_audit(entry)
 
 
 async def _coral_list_sessions(ctx: Context[Any, Any, Any] | None = None) -> dict[str, Any]:

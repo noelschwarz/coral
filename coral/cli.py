@@ -18,6 +18,9 @@ import psutil
 import typer
 
 from coral import __version__
+from coral.cli_client import as_list_of_dicts as _as_list_of_dicts
+from coral.cli_client import http_request
+from coral.cli_client import read_cli_token as _read_cli_token
 from coral.config import Config, ensure_config_file_exists, load_config
 from coral.crypto import MIN_PASSPHRASE_LENGTH, hash_token
 from coral.daemon import pid_running, run_daemon_blocking
@@ -293,70 +296,13 @@ def mcp_stdio(
     asyncio.run(_run())
 
 
-def _read_cli_token(coral_dir: Path) -> str | None:
-    token_path = coral_dir / "cli.token"
-    if not token_path.is_file():
-        return None
-    try:
-        return token_path.read_text(encoding="utf-8").strip() or None
-    except OSError:
-        return None
-
-
 def _http_get(url: str, *, token: str, timeout: float = 5.0) -> tuple[int, dict[str, Any]]:
-    import json as _json
-    import urllib.error
-    import urllib.request
-    from typing import cast
-
-    req = urllib.request.Request(
-        url,
-        headers={"Authorization": f"Bearer {token}", "Accept": "application/json"},
-        method="GET",
-    )
-
-    def _parse(body: bytes) -> dict[str, Any]:
-        if not body:
-            return {}
-        decoded = _json.loads(body.decode("utf-8"))
-        return cast(dict[str, Any], decoded) if isinstance(decoded, dict) else {}
-
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.status, _parse(resp.read())
-    except urllib.error.HTTPError as e:
-        return e.code, _parse(e.read())
-    except (urllib.error.URLError, TimeoutError):
-        return 0, {}
-
-
-def _as_list_of_dicts(value: Any) -> list[dict[str, Any]] | None:
-    """Coerce a parsed-JSON value into ``list[dict]`` or return None."""
-    if not isinstance(value, list):
-        return None
-    out: list[dict[str, Any]] = []
-    for item in value:  # pyright: ignore[reportUnknownVariableType]
-        if isinstance(item, dict):
-            out.append(item)  # pyright: ignore[reportUnknownArgumentType]
-    return out
+    return http_request("GET", url, token=token, timeout=timeout)
 
 
 def _http_delete(url: str, *, token: str, timeout: float = 5.0) -> int:
-    import urllib.error
-    import urllib.request
-
-    req = urllib.request.Request(
-        url,
-        headers={"Authorization": f"Bearer {token}"},
-        method="DELETE",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.status
-    except urllib.error.HTTPError as e:
-        return e.code
-    except (urllib.error.URLError, TimeoutError):
-        return 0
+    code, _ = http_request("DELETE", url, token=token, timeout=timeout)
+    return code
 
 
 @app.command("status")
@@ -629,50 +575,13 @@ def revoke(
 
 
 def _http_put(url: str, *, token: str, body: dict[str, Any], timeout: float = 5.0) -> int:
-    import json as _json
-    import urllib.error
-    import urllib.request
-
-    req = urllib.request.Request(
-        url,
-        data=_json.dumps(body).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/json",
-            "Content-Type": "application/json",
-        },
-        method="PUT",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.status
-    except urllib.error.HTTPError as e:
-        return e.code
-    except (urllib.error.URLError, TimeoutError):
-        return 0
+    code, _ = http_request("PUT", url, token=token, body=body, timeout=timeout)
+    return code
 
 
 def _http_post(url: str, *, token: str, body: dict[str, Any], timeout: float = 5.0) -> int:
-    import json as _json
-    import urllib.error
-    import urllib.request
-
-    req = urllib.request.Request(
-        url,
-        data=_json.dumps(body).encode("utf-8"),
-        headers={
-            "Authorization": f"Bearer {token}",
-            "Content-Type": "application/json",
-        },
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            return resp.status
-    except urllib.error.HTTPError as e:
-        return e.code
-    except (urllib.error.URLError, TimeoutError):
-        return 0
+    code, _ = http_request("POST", url, token=token, body=body, timeout=timeout)
+    return code
 
 
 def _daemon_token_or_exit(coral_dir: Path) -> tuple[Config, str]:

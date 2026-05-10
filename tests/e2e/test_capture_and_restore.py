@@ -21,20 +21,17 @@ from mcp.client.stdio import StdioServerParameters, stdio_client
 
 from coral.crypto import TEST_PARAMS
 from coral.models import SessionRecord
-from coral.vault import Vault, _compress_blob
+from coral.vault import Vault, compress_blob
 from tests.fixtures.test_server import COOKIE_NAME, COOKIE_VALUE
 from tests.fixtures.test_server.runner import run_test_server
 
-try:  # noqa: SIM105
-    import playwright  # noqa: F401
-except ImportError:  # pragma: no cover
-    pytest.skip("playwright not installed", allow_module_level=True)
+pytest.importorskip("playwright")
 
 
 async def _seed_session(home, origin: str) -> str:
     vault = await Vault.initialize(home, "correct horse battery staple", params=TEST_PARAMS)
     try:
-        blob = _compress_blob(
+        blob = compress_blob(
             {
                 "version": 1,
                 "origin": origin,

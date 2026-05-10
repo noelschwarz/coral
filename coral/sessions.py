@@ -33,14 +33,13 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from coral import diag
-from coral.models import AuditEntry
 from coral.policy import (
     PolicyEngine,
     default_policy_for_origin,
     load_policy_yaml,
 )
 from coral.restoration import apply_state_blob
-from coral.vault import Vault, _decompress_blob
+from coral.vault import Vault, decompress_blob
 
 if TYPE_CHECKING:
     from playwright.async_api import (
@@ -142,6 +141,8 @@ class SessionServer:
         self._headless = headless
         self._handles: dict[str, OpenSession] = {}
         self._lock = asyncio.Lock()
+        # Serializes the port-pick → Chromium-launch handoff (ADR-010).
+        self._launch_lock = asyncio.Lock()
         self._playwright: Playwright | None = None
 
     async def _ensure_playwright(self) -> Playwright:
@@ -166,29 +167,33 @@ class SessionServer:
             raise SessionNotActiveError(f"session {session_id} status={record.status}")
 
         try:
-            blob = _decompress_blob(record.state_blob)
+            blob = decompress_blob(record.state_blob)
         except Exception as exc:
             diag.error("session.open.failed", reason="decompress_failed", session_id=session_id)
             raise SessionServerError(f"failed to decompress state_blob: {exc}") from exc
 
         pw = await self._ensure_playwright()
-        cdp_port = _pick_tcp_port()
         user_data_dir = Path(tempfile.mkdtemp(prefix="coral-session-"))
-        try:
-            context = await pw.chromium.launch_persistent_context(
-                user_data_dir=str(user_data_dir),
-                headless=self._headless,
-                args=[
-                    f"--remote-debugging-port={cdp_port}",
-                    "--remote-debugging-address=127.0.0.1",
-                    "--disable-dev-shm-usage",
-                    "--no-first-run",
-                ],
-            )
-        except Exception as exc:
-            shutil.rmtree(user_data_dir, ignore_errors=True)
-            diag.error("session.open.failed", reason="chromium_launch", session_id=session_id)
-            raise SessionServerError(f"failed to launch chromium: {exc}") from exc
+        # Serialize the pick-port → Chromium-bind handoff. Two concurrent open()
+        # calls could otherwise race on the same free port between `bind(0)`
+        # closing and Chromium starting.
+        async with self._launch_lock:
+            cdp_port = _pick_tcp_port()
+            try:
+                context = await pw.chromium.launch_persistent_context(
+                    user_data_dir=str(user_data_dir),
+                    headless=self._headless,
+                    args=[
+                        f"--remote-debugging-port={cdp_port}",
+                        "--remote-debugging-address=127.0.0.1",
+                        "--disable-dev-shm-usage",
+                        "--no-first-run",
+                    ],
+                )
+            except Exception as exc:
+                shutil.rmtree(user_data_dir, ignore_errors=True)
+                diag.error("session.open.failed", reason="chromium_launch", session_id=session_id)
+                raise SessionServerError(f"failed to launch chromium: {exc}") from exc
 
         try:
             await apply_state_blob(context, blob)
@@ -354,15 +359,16 @@ class SessionServer:
         agent_id: str | None = None,
         origin: str | None = None,
     ) -> None:
-        entry = AuditEntry(
-            timestamp=int(time.time()),
+        from coral.audit import write_audit_row
+
+        await write_audit_row(
+            self._vault,
+            event_type=event_type,
+            detail=detail,
             session_id=session_id,
             agent_id=agent_id,
-            event_type=event_type,
             origin=origin,
-            detail=json.dumps(detail, separators=(",", ":"), sort_keys=True),
         )
-        await self._vault.insert_audit(entry)
 
 
 def recovery_kill_orphan_browsers() -> int:

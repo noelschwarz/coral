@@ -15,8 +15,8 @@ from coral.vault import (
     Vault,
     VaultIntegrityError,
     VaultLockedError,
-    _compress_blob,
-    _decompress_blob,
+    compress_blob,
+    decompress_blob,
     make_demo_session_record,
     read_plaintext_meta,
     unlock_vault,
@@ -166,16 +166,16 @@ async def test_encrypted_meta_mismatch_raises(tmp_path_factory: pytest.TempPathF
 
 def test_compress_decompress_round_trip() -> None:
     payload = {"version": 1, "cookies": [{"name": "k", "value": "v"}], "origin": "https://x"}
-    assert _decompress_blob(_compress_blob(payload)) == payload
+    assert decompress_blob(compress_blob(payload)) == payload
 
 
 def test_decompress_empty_returns_empty_dict() -> None:
-    assert _decompress_blob(b"") == {}
+    assert decompress_blob(b"") == {}
 
 
 def test_decompress_invalid_blob_raises() -> None:
     with pytest.raises(VaultIntegrityError):
-        _decompress_blob(b"not-a-gzip-stream")
+        decompress_blob(b"not-a-gzip-stream")
 
 
 def test_decompress_non_object_raises() -> None:
@@ -183,7 +183,7 @@ def test_decompress_non_object_raises() -> None:
 
     blob = gzip.compress(b'["not-an-object"]')
     with pytest.raises(VaultIntegrityError):
-        _decompress_blob(blob)
+        decompress_blob(blob)
 
 
 @pytest.mark.asyncio

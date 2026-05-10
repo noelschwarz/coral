@@ -131,7 +131,7 @@ async def _coral_list_sessions(ctx: Context[Any, Any, Any] | None = None) -> dic
     return {"sessions": sessions}
 
 
-def _not_implemented(
+def _not_implemented(  # pyright: ignore[reportUnusedFunction]
     tool_name: str, *, message: str = WEEK2_MESSAGE
 ) -> Callable[..., Awaitable[dict[str, Any]]]:
     async def _stub(
@@ -200,6 +200,102 @@ async def _coral_close_session(
     return {"closed": True, "reason": "agent_closed"}
 
 
+async def _coral_check_action(
+    session_handle: str,
+    action: dict[str, Any],
+    ctx: Context[Any, Any, Any] | None = None,
+) -> dict[str, Any]:
+    """Pre-flight check (spec §5.2 ``coral_check_action``).
+
+    Returns ``{"decision": "allow"|"deny"|"review_required", "reason": ...}``.
+    Counts against the rate-limit buckets — call only when you actually intend
+    to run the action.
+    """
+    from coral.sessions import SessionHandleNotFoundError
+
+    rt = _runtime()
+    if rt.session_server is None:
+        raise RuntimeError("session server is not configured")
+    action_type = str(action.get("type") or "").strip()
+    if not action_type:
+        raise ValueError("action.type is required")
+    agent_id = _agent_from_ctx(ctx)
+    try:
+        engine = rt.session_server.engine_for_handle(session_handle)
+    except SessionHandleNotFoundError as exc:
+        raise ValueError(f"session_handle_not_found: {exc}") from exc
+    decision = engine.evaluate_action(action_type)
+    reason = {
+        "allow": "policy.allow",
+        "deny": f"policy denies action '{action_type}' or rate limit hit",
+        "review_required": f"policy requires human approval for '{action_type}'",
+    }[decision]
+    await _audit(
+        event_type=f"policy.action.{decision}",
+        detail={"action_type": action_type, "handle": session_handle},
+        agent_id=agent_id,
+    )
+    return {"decision": decision, "reason": reason}
+
+
+async def _coral_request_review(
+    session_handle: str,
+    action: dict[str, Any],
+    ctx: Context[Any, Any, Any] | None = None,
+) -> dict[str, Any]:
+    """Request operator review for a policy-flagged action (spec §5.2).
+
+    Returns ``{review_id, status: "pending"}`` immediately. The operator
+    decides via ``coral approve <review_id>`` / ``coral deny <review_id>``;
+    agents poll their state out-of-band (or re-call ``coral_check_action``
+    after waiting). Non-blocking by design — see ADR-011.
+    """
+    import json as _json
+    import time as _time
+    import uuid as _uuid
+
+    from coral.models import ReviewRecord
+    from coral.sessions import SessionHandleNotFoundError
+
+    rt = _runtime()
+    if rt.session_server is None:
+        raise RuntimeError("session server is not configured")
+    action_type = str(action.get("type") or "").strip()
+    if not action_type:
+        raise ValueError("action.type is required")
+    agent_id = _agent_from_ctx(ctx)
+    try:
+        open_session = rt.session_server.get(session_handle)
+    except SessionHandleNotFoundError as exc:
+        raise ValueError(f"session_handle_not_found: {exc}") from exc
+    review_id = str(_uuid.uuid4())
+    review = ReviewRecord(
+        id=review_id,
+        session_handle=session_handle,
+        session_id=open_session.session_id,
+        agent_id=agent_id,
+        action_type=action_type,
+        action_detail=_json.dumps(action, separators=(",", ":"), sort_keys=True),
+        status="pending",
+        created_at=int(_time.time()),
+    )
+    await rt.vault.insert_review(review)
+    diag.warn(
+        "policy.review.requested",
+        review_id=review_id,
+        agent_id=agent_id,
+        action_type=action_type,
+    )
+    await _audit(
+        event_type="policy.review.requested",
+        detail={"review_id": review_id, "action_type": action_type},
+        session_id=open_session.session_id,
+        agent_id=agent_id,
+        origin=open_session.origin,
+    )
+    return {"review_id": review_id, "status": "pending"}
+
+
 def register_tools(mcp: FastMCP) -> None:
     """Attach every Coral MCP tool to ``mcp``. Idempotent."""
     mcp.add_tool(
@@ -225,18 +321,20 @@ def register_tools(mcp: FastMCP) -> None:
         description="Close an open session context.",
     )
     mcp.add_tool(
-        _not_implemented("coral_check_action", message=WEEK3_MESSAGE),
+        _coral_check_action,
         name="coral_check_action",
         description=(
-            "Evaluate whether an action is allowed under the session's policy. "
-            "Implementation in week 3."
+            "Pre-flight check: evaluate whether an action is allowed by the session's policy. "
+            "Returns allow/deny/review_required."
         ),
     )
     mcp.add_tool(
-        _not_implemented("coral_request_review", message=WEEK3_MESSAGE),
+        _coral_request_review,
         name="coral_request_review",
         description=(
-            "Request operator review for a policy-flagged action. Implementation in week 3."
+            "Record a pending operator review for a policy-flagged action. "
+            "Returns a review_id immediately; the operator decides via "
+            "`coral approve <id>` / `coral deny <id>`."
         ),
     )
 

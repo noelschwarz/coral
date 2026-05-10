@@ -37,8 +37,26 @@ re-pairing through the challenge.
 uv run coral status                # daemon state, active sessions, connected agents
 uv run coral audit --since 0 --limit 50
 uv run coral audit --event-type session.captured
+uv run coral list                  # captured sessions
+uv run coral revoke https://x.com  # revoke active session(s) for an origin
 uv run coral panic --yes           # revoke everything + stop daemon (trust recovery)
 ```
+
+### Policy & review
+
+```bash
+uv run coral policy get https://github.com           # print the YAML
+uv run coral policy put https://github.com -f p.yaml # upload
+uv run coral reviews list                            # pending operator reviews
+uv run coral approve <review_id>
+uv run coral deny    <review_id>
+```
+
+Six bundled behavior packs (GitHub, Gmail, Linear, LinkedIn, Notion, Slack)
+seed on `coral init` with conservative defaults — `default_action: deny` plus
+explicit `allowed_paths`. See [`docs/policy-language.md`](docs/policy-language.md)
+for the YAML schema and decision semantics; [ADR-011](docs/ADR-011-policy-engine.md)
+for the design rationale.
 
 `coral status` and `coral audit` use the bridge token in `$CORAL_HOME/cli.token`,
 written automatically when `coral start` runs.

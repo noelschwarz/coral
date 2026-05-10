@@ -7,7 +7,7 @@ the daemon owns (week 2).
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -132,3 +132,24 @@ class AuditEntryResponse(BaseModel):
 
 class AuditListResponse(BaseModel):
     entries: list[AuditEntryResponse]
+
+
+class ReviewItem(BaseModel):
+    id: str
+    session_handle: str
+    session_id: str
+    agent_id: str | None
+    action_type: str
+    action_detail: str
+    status: str
+    created_at: int
+    decided_at: int | None
+    decided_by: str | None
+
+
+class ReviewListResponse(BaseModel):
+    reviews: list[ReviewItem]
+
+
+class ReviewDecisionRequest(BaseModel):
+    decision: Literal["approved", "denied"]

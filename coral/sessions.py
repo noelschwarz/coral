@@ -34,6 +34,11 @@ from typing import TYPE_CHECKING, Any
 
 from coral import diag
 from coral.models import AuditEntry
+from coral.policy import (
+    PolicyEngine,
+    default_policy_for_origin,
+    load_policy_yaml,
+)
 from coral.restoration import apply_state_blob
 from coral.vault import Vault, _decompress_blob
 
@@ -75,6 +80,7 @@ class OpenSession:
     expires_at: int
     context: BrowserContext  # persistent-context: also the Browser
     user_data_dir: Path
+    engine: PolicyEngine
     timeout_task: asyncio.Task[None] | None = field(default=None, repr=False)
 
     def to_open_response(self) -> dict[str, Any]:
@@ -83,7 +89,7 @@ class OpenSession:
             "session_handle": self.handle,
             "cdp_url": self.cdp_url,
             "expires_at": self.expires_at,
-            "policy_summary": {},  # week 3 fills this in
+            "policy_summary": self.engine.policy_summary,
         }
 
 
@@ -186,10 +192,12 @@ class SessionServer:
 
         try:
             await apply_state_blob(context, blob)
+            engine = await self._build_engine(record.origin)
             await self._install_route_handler(
                 context,
                 session_id=session_id,
                 agent_id=agent_id,
+                engine=engine,
             )
             cdp_url = await asyncio.to_thread(_read_cdp_ws_url, cdp_port)
         except Exception:
@@ -212,6 +220,7 @@ class SessionServer:
             expires_at=expires_at,
             context=context,
             user_data_dir=user_data_dir,
+            engine=engine,
         )
 
         async with self._lock:
@@ -275,6 +284,9 @@ class SessionServer:
             raise SessionHandleNotFoundError(handle)
         return self._handles[handle]
 
+    def engine_for_handle(self, handle: str) -> PolicyEngine:
+        return self.get(handle).engine
+
     async def _auto_close(self, handle: str, delay_seconds: int) -> None:
         try:
             await asyncio.sleep(delay_seconds)
@@ -282,26 +294,54 @@ class SessionServer:
             return
         await self.close(handle, reason="timeout")
 
+    async def _build_engine(self, origin: str) -> PolicyEngine:
+        """Load the persisted policy for ``origin`` or fall back to the default."""
+        record = await self._vault.get_policy(origin)
+        if record is None:
+            return PolicyEngine(default_policy_for_origin(origin))
+        try:
+            policy = load_policy_yaml(origin=origin, yaml_body=record.yaml_body)
+        except Exception as exc:
+            diag.warn("policy.load_failed", origin=origin, reason=repr(exc))
+            return PolicyEngine(default_policy_for_origin(origin))
+        return PolicyEngine(policy)
+
     async def _install_route_handler(
         self,
         context: BrowserContext,
         *,
         session_id: str,
         agent_id: str,
+        engine: PolicyEngine,
     ) -> None:
-        """Audit every navigation; week 3's policy engine replaces the body here."""
+        """Route every request through the policy engine (Track E)."""
 
         async def _route_handler(route: Route) -> None:
             req = route.request
-            if req.is_navigation_request():
+            if not req.is_navigation_request():
+                await route.continue_()
+                return
+            decision = engine.evaluate_navigation(req.url)
+            base_url = req.url.split("?", 1)[0]
+            if decision == "allow":
                 await self._audit(
                     event_type="navigation",
-                    detail={"url": req.url, "method": req.method},
+                    detail={"url": req.url, "method": req.method, "decision": "allow"},
                     session_id=session_id,
                     agent_id=agent_id,
-                    origin=req.url.split("?", 1)[0],
+                    origin=base_url,
                 )
-            await route.continue_()
+                await route.continue_()
+                return
+            # deny + review_required both abort the request.
+            await self._audit(
+                event_type="policy.deny" if decision == "deny" else "policy.review_required",
+                detail={"url": req.url, "method": req.method, "decision": decision},
+                session_id=session_id,
+                agent_id=agent_id,
+                origin=base_url,
+            )
+            await route.abort("blockedbyclient")
 
         await context.route("**/*", _route_handler)
 

@@ -1,11 +1,32 @@
-# Placeholder behavior pack (foundations).
+# Linear default policy (Track E).
 origin: https://linear.app
+default_action: deny
 allowed_paths:
-  - /*
-denied_paths: []
-denied_actions: []
+  - /
+  - /*/issue/*
+  - /*/team/*
+  - /*/project/*
+  - /*/triage
+  - /*/inbox
+  - /*/my-issues
+  - /search*
+denied_paths:
+  - /*/settings/*
+  - /settings/*
+  - /*/admin/*
+denied_actions:
+  - delete_workspace
+  - delete_team
+  - delete_project
+review_required:
+  - action: create_issue
+  - action: update_issue_status
+  - action: comment
+  - action: assign_issue
 rate_limits:
   actions_per_minute: 30
+  actions_per_hour: 400
+  navigations_per_minute: 90
 session:
   max_duration_minutes: 60
   kill_on_redirect_to_login: true

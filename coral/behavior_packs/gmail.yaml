@@ -1,11 +1,34 @@
-# Placeholder behavior pack (foundations).
+# Gmail default policy (Track E).
+#
+# Gmail is high-stakes (financial, identity). Posture is conservative: only the
+# inbox views are allowed; every state-changing action requires review.
 origin: https://mail.google.com
+default_action: deny
 allowed_paths:
-  - /*
-denied_paths: []
-denied_actions: []
+  - /mail/u/0/
+  - /mail/u/0/#inbox*
+  - /mail/u/0/#search/*
+  - /mail/u/0/#label/*
+  - /mail/u/0/#sent*
+  - /mail/u/0/#starred*
+denied_paths:
+  - /mail/u/0/#settings*
+  - /mail/u/0/#accounts*
+  - /mail/u/0/#delegations*
+denied_actions:
+  - delete_account
+  - forwarding_setup
+  - filter_create_destructive
+review_required:
+  - action: send_email
+  - action: reply_email
+  - action: archive
+  - action: delete_email
+  - action: mark_spam
 rate_limits:
-  actions_per_minute: 30
+  actions_per_minute: 10
+  actions_per_hour: 100
+  navigations_per_minute: 30
 session:
-  max_duration_minutes: 60
+  max_duration_minutes: 30
   kill_on_redirect_to_login: true

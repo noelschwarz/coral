@@ -55,6 +55,24 @@ class PolicyRecord(BaseModel):
     updated_at: int
 
 
+ReviewStatus = Literal["pending", "approved", "denied", "expired"]
+
+
+class ReviewRecord(BaseModel):
+    """Row in ``pending_reviews`` (Track E)."""
+
+    id: str
+    session_handle: str
+    session_id: str
+    agent_id: str | None = None
+    action_type: str
+    action_detail: str = "{}"
+    status: ReviewStatus = "pending"
+    created_at: int
+    decided_at: int | None = None
+    decided_by: str | None = None
+
+
 def schema_table_names() -> list[str]:
     """Stable ordered table names from §4.1 (excluding internal vault tables)."""
     return list(SPEC_SCHEMA_TABLES)

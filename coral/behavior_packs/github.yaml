@@ -1,11 +1,43 @@
-# Placeholder behavior pack (foundations).
+# GitHub default policy (Track E).
+#
+# Posture: allow browsing and read-only API navigation; require operator review
+# for any state-changing action (issues, PRs, comments, merges). Settings,
+# billing, and account deletion paths are denied outright.
 origin: https://github.com
+default_action: deny
 allowed_paths:
-  - /*
-denied_paths: []
-denied_actions: []
+  - /
+  - /dashboard
+  - /dashboard/*
+  - /*/*
+  - /*/*/issues
+  - /*/*/issues/*
+  - /*/*/pulls
+  - /*/*/pulls/*
+  - /*/*/discussions/*
+  - /notifications
+  - /notifications/*
+  - /search
+  - /search?*
+denied_paths:
+  - /settings/*
+  - /*/*/settings/*
+  - /organizations/*/billing
+  - /sponsors/*
+  - /account/*
+denied_actions:
+  - delete_repository
+  - transfer_repository
+  - delete_account
+review_required:
+  - action: create_issue
+  - action: create_pull_request
+  - action: comment
+  - action: merge_pull_request
 rate_limits:
-  actions_per_minute: 30
+  actions_per_minute: 20
+  actions_per_hour: 300
+  navigations_per_minute: 60
 session:
   max_duration_minutes: 60
   kill_on_redirect_to_login: true

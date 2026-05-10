@@ -1,11 +1,27 @@
-# Placeholder behavior pack (foundations).
+# Notion default policy (Track E).
 origin: https://www.notion.so
+default_action: deny
 allowed_paths:
+  - /
   - /*
-denied_paths: []
-denied_actions: []
+  - /*/*
+denied_paths:
+  - /settings/*
+  - /*/settings/*
+  - /*/billing
+  - /*/members
+denied_actions:
+  - delete_workspace
+  - delete_page_permanently
+review_required:
+  - action: create_page
+  - action: update_page
+  - action: share_page
+  - action: invite_member
 rate_limits:
   actions_per_minute: 30
+  actions_per_hour: 400
+  navigations_per_minute: 90
 session:
   max_duration_minutes: 60
   kill_on_redirect_to_login: true

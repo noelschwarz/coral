@@ -46,6 +46,9 @@ from coral.api_models import (
     HandshakeResponse,
     PolicyPutRequest,
     PolicyResponse,
+    ReviewDecisionRequest,
+    ReviewItem,
+    ReviewListResponse,
     SessionListItem,
     SessionListResponse,
     TokenInfo,
@@ -414,6 +417,64 @@ async def put_policy(
         detail={"origin": decoded, "yaml_length": len(body.yaml_body)},
         agent_id=auth.name,
         origin=decoded,
+    )
+    return Response(status_code=204)
+
+
+@router.get("/reviews", response_model=ReviewListResponse)
+async def list_reviews(
+    vault: Vault = Depends(get_vault),
+    auth: AuthContext = Depends(require_auth),
+) -> ReviewListResponse:
+    rows = await vault.list_pending_reviews()
+    items = [
+        ReviewItem(
+            id=r.id,
+            session_handle=r.session_handle,
+            session_id=r.session_id,
+            agent_id=r.agent_id,
+            action_type=r.action_type,
+            action_detail=r.action_detail,
+            status=r.status,
+            created_at=r.created_at,
+            decided_at=r.decided_at,
+            decided_by=r.decided_by,
+        )
+        for r in rows
+    ]
+    await _audit(
+        vault,
+        event_type="policy.review.list",
+        detail={"count": len(items)},
+        agent_id=auth.name,
+    )
+    return ReviewListResponse(reviews=items)
+
+
+@router.post("/reviews/{review_id}/decision", status_code=204)
+async def decide_review(
+    body: ReviewDecisionRequest,
+    review_id: str = Path(..., min_length=1, max_length=64),
+    vault: Vault = Depends(get_vault),
+    auth: AuthContext = Depends(require_auth),
+) -> Response:
+    existing = await vault.get_review(review_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="review_not_found")
+    if existing.status != "pending":
+        raise HTTPException(status_code=409, detail=f"review_already_{existing.status}")
+    await vault.decide_review(
+        review_id,
+        status=body.decision,
+        decided_by=auth.name,
+        now=int(time.time()),
+    )
+    await _audit(
+        vault,
+        event_type=f"policy.review.{body.decision}",
+        detail={"review_id": review_id, "action_type": existing.action_type},
+        session_id=existing.session_id,
+        agent_id=auth.name,
     )
     return Response(status_code=204)
 

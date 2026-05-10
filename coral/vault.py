@@ -34,7 +34,15 @@ from coral.crypto import (
     generate_salt,
     hash_token,
 )
-from coral.models import AuditEntry, PolicyRecord, SessionRecord, SessionStatus, TokenRecord
+from coral.models import (
+    AuditEntry,
+    PolicyRecord,
+    ReviewRecord,
+    ReviewStatus,
+    SessionRecord,
+    SessionStatus,
+    TokenRecord,
+)
 
 _WRITER_STOP: Final = object()
 
@@ -476,6 +484,109 @@ class Vault:
             return None
         return PolicyRecord(origin=str(row[0]), yaml_body=str(row[1]), updated_at=int(row[2]))
 
+    async def insert_review(self, review: ReviewRecord) -> None:
+        sql = """
+            INSERT INTO pending_reviews (
+                id, session_handle, session_id, agent_id,
+                action_type, action_detail, status, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        """
+        await self._enqueue_write(
+            sql,
+            (
+                review.id,
+                review.session_handle,
+                review.session_id,
+                review.agent_id,
+                review.action_type,
+                review.action_detail,
+                review.status,
+                review.created_at,
+            ),
+        )
+
+    async def get_review(self, review_id: str) -> ReviewRecord | None:
+        conn = self._require_conn()
+
+        def work() -> sqlite3.Row | tuple[Any, ...] | None:
+            cur = conn.execute(
+                """
+                SELECT id, session_handle, session_id, agent_id,
+                       action_type, action_detail, status,
+                       created_at, decided_at, decided_by
+                FROM pending_reviews WHERE id = ?
+                """,
+                (review_id,),
+            )
+            row = cur.fetchone()
+            cur.close()
+            return row
+
+        row = await self._run_sync(work)
+        if row is None:
+            return None
+        return ReviewRecord(
+            id=str(row[0]),
+            session_handle=str(row[1]),
+            session_id=str(row[2]),
+            agent_id=cast(str | None, row[3]),
+            action_type=str(row[4]),
+            action_detail=str(row[5]),
+            status=cast(ReviewStatus, str(row[6])),
+            created_at=int(row[7]),
+            decided_at=cast(int | None, row[8]),
+            decided_by=cast(str | None, row[9]),
+        )
+
+    async def list_pending_reviews(self) -> list[ReviewRecord]:
+        conn = self._require_conn()
+
+        def work() -> list[sqlite3.Row | tuple[Any, ...]]:
+            cur = conn.execute(
+                """
+                SELECT id, session_handle, session_id, agent_id,
+                       action_type, action_detail, status,
+                       created_at, decided_at, decided_by
+                FROM pending_reviews WHERE status = 'pending'
+                ORDER BY created_at ASC
+                """
+            )
+            rows = cur.fetchall()
+            cur.close()
+            return list(rows)
+
+        rows = await self._run_sync(work)
+        return [
+            ReviewRecord(
+                id=str(r[0]),
+                session_handle=str(r[1]),
+                session_id=str(r[2]),
+                agent_id=cast(str | None, r[3]),
+                action_type=str(r[4]),
+                action_detail=str(r[5]),
+                status=cast(ReviewStatus, str(r[6])),
+                created_at=int(r[7]),
+                decided_at=cast(int | None, r[8]),
+                decided_by=cast(str | None, r[9]),
+            )
+            for r in rows
+        ]
+
+    async def decide_review(
+        self,
+        review_id: str,
+        *,
+        status: ReviewStatus,
+        decided_by: str,
+        now: int,
+    ) -> None:
+        sql = """
+            UPDATE pending_reviews
+            SET status = ?, decided_at = ?, decided_by = ?
+            WHERE id = ? AND status = 'pending'
+        """
+        await self._enqueue_write(sql, (status, now, decided_by, review_id))
+
     async def upsert_policy(self, origin: str, yaml_body: str) -> None:
         now = int(time.time())
         sql = """
@@ -643,6 +754,49 @@ async def unlock_vault(*, home: Path, passphrase: str) -> Vault:
     meta = read_plaintext_meta(home=home)
     key = derive_key(passphrase, meta.salt, params=meta.params)
     return await Vault.open(vault_db_path(home), key, plaintext_meta=meta)
+
+
+async def seed_bundled_behavior_packs(vault: Vault) -> int:
+    """Load every bundled behavior pack into the ``policies`` table.
+
+    Only inserts policies for origins that don't already have one — re-running
+    is safe. Returns the number of packs newly inserted.
+    """
+    pack_dir = Path(__file__).resolve().parent / "behavior_packs"
+    inserted = 0
+    for yaml_path in sorted(pack_dir.glob("*.yaml")):
+        body = yaml_path.read_text(encoding="utf-8")
+        try:
+            doc = json.loads(json.dumps(_safe_yaml_to_dict(body)))
+        except Exception:
+            continue
+        origin = doc.get("__origin_hint")
+        if not isinstance(origin, str):
+            continue
+        existing = await vault.get_policy(origin)
+        if existing is not None:
+            continue
+        await vault.upsert_policy(origin, body)
+        inserted += 1
+    return inserted
+
+
+def _safe_yaml_to_dict(body: str) -> dict[str, Any]:
+    """Parse YAML and extract an ``__origin_hint`` from the bundled pack.
+
+    Bundled packs document the origin in a top-level comment ``# ... origin: <url>``
+    via the YAML's ``origin`` field. Fall back to the YAML's own ``origin`` key
+    if present; otherwise infer from the filename.
+    """
+    import yaml as _yaml
+
+    parsed_any: Any = _yaml.safe_load(body)
+    if not isinstance(parsed_any, dict):
+        return {}
+    out: dict[str, Any] = cast(dict[str, Any], parsed_any)
+    if "origin" in out and isinstance(out["origin"], str):
+        out["__origin_hint"] = out["origin"]
+    return out
 
 
 def make_demo_session_record(*, origin: str = "https://example.com") -> SessionRecord:

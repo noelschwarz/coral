@@ -22,7 +22,6 @@ Non-functional posture:
 
 from __future__ import annotations
 
-import json
 import re
 import time
 import uuid
@@ -57,8 +56,8 @@ from coral.api_models import (
 )
 from coral.auth import AuthContext, get_vault, require_auth
 from coral.crypto import constant_time_compare, generate_token, hash_token
-from coral.models import AuditEntry, SessionRecord
-from coral.vault import Vault
+from coral.models import SessionRecord
+from coral.vault import Vault, compress_blob
 
 DEFAULT_AUDIT_LIMIT = 100
 MAX_AUDIT_LIMIT = 1000
@@ -84,10 +83,6 @@ class HandshakeState:
         return len(self.attempt_log) <= self.rate_limit_per_minute
 
 
-def _audit_detail(d: dict[str, Any]) -> str:
-    return json.dumps(d, separators=(",", ":"), sort_keys=True)
-
-
 async def _audit(
     vault: Vault,
     *,
@@ -97,20 +92,25 @@ async def _audit(
     agent_id: str | None = None,
     origin: str | None = None,
 ) -> None:
-    """Write an audit row or fail the request loudly (handoff: integrity over best-effort)."""
-    entry = AuditEntry(
-        timestamp=int(time.time()),
-        session_id=session_id,
-        agent_id=agent_id,
-        event_type=event_type,
-        origin=origin,
-        detail=_audit_detail(detail),
-    )
-    try:
-        await vault.insert_audit(entry)
-    except Exception as exc:
-        import sys
+    """Write an audit row or fail the request loudly (handoff: integrity over best-effort).
 
+    Delegates row construction + insertion to :mod:`coral.audit` (the single
+    source of truth) and only adds the HTTP-API ``500`` failure mode on top.
+    """
+    import sys
+
+    from coral.audit import write_audit_row
+
+    try:
+        await write_audit_row(
+            vault,
+            event_type=event_type,
+            detail=detail,
+            session_id=session_id,
+            agent_id=agent_id,
+            origin=origin,
+        )
+    except Exception as exc:
         print(
             f"coral: audit log write failed ({event_type}): {exc!r}",
             file=sys.stderr,
@@ -307,9 +307,7 @@ async def capture_session(
                 cookie_dicts.append(raw_item)  # pyright: ignore[reportUnknownArgumentType]
     expires_at = _cookie_min_expiry(cookie_dicts)
 
-    from coral.vault import _compress_blob
-
-    blob = _compress_blob(state_dict)
+    blob = compress_blob(state_dict)
 
     rec = SessionRecord(
         id=str(uuid.uuid4()),

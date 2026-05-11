@@ -11,18 +11,15 @@ import pytest
 from coral.crypto import TEST_PARAMS
 from coral.models import SessionRecord
 from coral.sessions import SessionServer
-from coral.vault import Vault, _compress_blob
+from coral.vault import Vault, compress_blob
 from tests.fixtures.test_server import COOKIE_NAME, COOKIE_VALUE
 from tests.fixtures.test_server.runner import run_test_server
 
-try:  # noqa: SIM105
-    import playwright  # noqa: F401
-except ImportError:  # pragma: no cover
-    pytest.skip("playwright not installed", allow_module_level=True)
+pytest.importorskip("playwright")
 
 
 def _build_session_for(origin: str) -> SessionRecord:
-    blob = _compress_blob(
+    blob = compress_blob(
         {
             "version": 1,
             "origin": origin,

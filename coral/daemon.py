@@ -12,6 +12,7 @@ from types import FrameType
 
 import uvicorn
 
+from coral import diag
 from coral.config import Config, load_config
 from coral.crypto import generate_challenge, generate_token, hash_token
 from coral.http_api import HandshakeState, build_http_app
@@ -44,6 +45,12 @@ async def run_daemon(*, home: Path | None = None, passphrase: str) -> None:
     cfg = load_config()
     vault = await unlock_vault(home=cfg.coral_home, passphrase=passphrase)
     await _provision_cli_token(cfg=cfg, vault=vault)
+    # Pre-Track-E vaults won't have the bundled behavior packs seeded; idempotent.
+    from coral.vault import seed_bundled_behavior_packs
+
+    seeded = await seed_bundled_behavior_packs(vault)
+    if seeded:
+        diag.info("daemon.seeded_packs", count=seeded)
 
     challenge = generate_challenge()
     handshake_state = HandshakeState(

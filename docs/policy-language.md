@@ -80,6 +80,41 @@ and `/reviews`) using the `cli.token` bridge written by `coral start`.
   `{review_id, status: "pending"}` immediately (non-blocking — see ADR-011).
   Agents poll or abandon.
 
+### Polling pattern for non-blocking review
+
+The agent's recommended loop:
+
+```python
+res = await session.call_tool("coral_request_review", {
+    "session_handle": handle,
+    "action": {"type": "post_content", "target": "/feed/"},
+})
+review_id = res.structuredContent["review_id"]
+
+# Tell the human what's happening (e.g. via the chat the agent is in).
+# Then poll on a sensible cadence — the operator has to switch terminals.
+
+import asyncio
+for _ in range(120):  # up to ~10 minutes
+    await asyncio.sleep(5)
+    check = await session.call_tool("coral_check_action", {
+        "session_handle": handle,
+        "action": {"type": "post_content"},
+    })
+    decision = check.structuredContent["decision"]
+    if decision in {"allow", "deny"}:
+        break
+```
+
+The operator decides via `coral approve <review_id>` / `coral deny <review_id>`.
+After they decide, the agent's next `coral_check_action` returns `allow` or
+`deny` (the policy engine consults the stored decision before consulting the
+YAML).
+
+Note (v1 limitation): the engine doesn't yet consult `pending_reviews` rows
+when re-checking — the agent has to know what was approved. Wire this in v1.x
+when the per-review decision is needed for resume-and-continue flows.
+
 ## What's NOT in the language yet
 
 - **Per-agent filtering.** A policy applies to every agent that opens the

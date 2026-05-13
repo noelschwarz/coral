@@ -442,16 +442,27 @@ async def run_mcp_stdio(
     vault: Vault,
     agent_name: str = "stdio",
     session_max_duration_minutes: int = 60,
+    coral_home: object | None = None,
 ) -> None:
     """Run Coral MCP with stdio transport.
 
     The caller provides a vault that the tools will read/write through. A fresh
     ``SessionServer`` is instantiated so ``coral_open_session`` works the same
-    way it does inside the long-running daemon.
+    way it does inside the long-running daemon. ``coral_home`` is forwarded so
+    spawned Chromium processes carry the orphan-recovery tag (spec §7.4).
     """
+    from pathlib import Path as _Path
+
     from coral.sessions import SessionServer
 
-    session_server = SessionServer(vault=vault, max_duration_minutes=session_max_duration_minutes)
+    _home: _Path | None = None
+    if isinstance(coral_home, (str, _Path)):
+        _home = _Path(coral_home)
+    session_server = SessionServer(
+        vault=vault,
+        max_duration_minutes=session_max_duration_minutes,
+        coral_home=_home,
+    )
     set_runtime(MCPRuntime(vault=vault, agent_name=agent_name, session_server=session_server))
     try:
         mcp = build_mcp_server()

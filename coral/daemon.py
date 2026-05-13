@@ -22,7 +22,7 @@ from coral.mcp_server import (
     build_mcp_server,
     set_runtime,
 )
-from coral.sessions import SessionServer
+from coral.sessions import SessionServer, recovery_kill_orphan_browsers
 from coral.vault import Vault, unlock_vault
 
 
@@ -43,6 +43,16 @@ async def run_daemon(*, home: Path | None = None, passphrase: str) -> None:
         os.environ["CORAL_HOME"] = str(home.resolve())
 
     cfg = load_config()
+    # Orphan-process recovery (spec §7.4): kill Chromium survivors from a
+    # crashed previous daemon for *this* coral_home. No-op when nothing matches.
+    try:
+        orphans_killed = recovery_kill_orphan_browsers(cfg.coral_home)
+    except Exception as exc:
+        diag.warn("daemon.orphan_sweep_failed", reason=repr(exc))
+        orphans_killed = 0
+    if orphans_killed:
+        diag.warn("daemon.orphan_chromium_killed", count=orphans_killed)
+
     vault = await unlock_vault(home=cfg.coral_home, passphrase=passphrase)
     await _provision_cli_token(cfg=cfg, vault=vault)
     # Pre-Track-E vaults won't have the bundled behavior packs seeded; idempotent.
@@ -122,6 +132,7 @@ async def run_daemon(*, home: Path | None = None, passphrase: str) -> None:
     session_server = SessionServer(
         vault=vault,
         max_duration_minutes=cfg.session_max_duration_minutes,
+        coral_home=cfg.coral_home,
     )
     set_runtime(MCPRuntime(vault=vault, agent_name="mcp-http", session_server=session_server))
     mcp = build_mcp_server(http_host="127.0.0.1", http_port=cfg.mcp_http_port)

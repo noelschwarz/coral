@@ -3,11 +3,36 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [project]
-name = "coral"
-version = "0.1.0"
-description = "Local-first agent-native browser session bridge (daemon, CLI, Chrome extension)"
+name = "coralbridge"
+version = "0.5.0"
+description = "Local-first session bridge that lets AI agents borrow your authenticated browser sessions per-site, per-action, fully audited."
+readme = "README.md"
 requires-python = ">=3.11"
+license = { text = "MIT" }
 authors = [{ name = "Coral contributors" }]
+keywords = [
+  "ai",
+  "agents",
+  "browser-automation",
+  "mcp",
+  "model-context-protocol",
+  "playwright",
+  "local-first",
+  "security",
+]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: MacOS",
+  "Operating System :: POSIX :: Linux",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Internet :: WWW/HTTP :: Browsers",
+  "Topic :: Security :: Cryptography",
+  "Topic :: Software Development :: Libraries :: Python Modules",
+]
 dependencies = [
   "fastapi>=0.115",
   "uvicorn[standard]>=0.32",
@@ -35,6 +60,11 @@ dev = [
 playwright = [
   "playwright>=1.56,<1.57",
 ]
+
+[project.urls]
+Homepage = "https://github.com/noelschwarz/coral"
+Repository = "https://github.com/noelschwarz/coral"
+"Issue Tracker" = "https://github.com/noelschwarz/coral/issues"
 
 [project.scripts]
 coral = "coral.cli:app"

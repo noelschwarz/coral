@@ -7,7 +7,10 @@ Three pieces:
 - **Chrome extension** (`/extension/`, separate codebase) — captures sessions from your normal browsing.
 - **MCP integration** — any MCP-speaking agent (Claude Desktop, Cursor, Claude Code, browser-use, Stagehand) drives Coral via stdio or HTTP.
 
-Status: **v0.5.0 — daemon + CLI complete; extension and PyPI publish pending.** The mechanical thesis is provable end-to-end ([e2e test](tests/e2e/test_capture_and_restore.py)).
+Status: **v0.5.0 — daemon + CLI + Chrome extension shipped; PyPI publish pending.**
+The mechanical thesis is provable end-to-end ([e2e test](tests/e2e/test_capture_and_restore.py)),
+and the extension implements the spec §13.1 onboarding flow
+([install guide](extension/INSTALL.md)).
 
 ## Install (current)
 

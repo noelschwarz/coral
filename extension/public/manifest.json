@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
-  "name": "Coral (dev)",
-  "version": "0.1.0",
-  "description": "Coral session capture — development scaffold (see coral-engineering-spec.md).",
+  "name": "Coral",
+  "version": "0.5.0",
+  "description": "Lend your authenticated browser sessions to AI agents on a per-site, per-action, fully audited basis. Local-first, no cloud.",
   "action": {
     "default_title": "Coral",
     "default_popup": "popup.html"
@@ -11,6 +11,6 @@
     "service_worker": "background.js",
     "type": "module"
   },
-  "permissions": ["storage", "tabs", "scripting"],
-  "host_permissions": ["http://127.0.0.1/*"]
+  "permissions": ["storage", "tabs", "scripting", "cookies", "alarms"],
+  "host_permissions": ["http://127.0.0.1/*", "<all_urls>"]
 }

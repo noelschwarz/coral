@@ -6,9 +6,52 @@
     <link rel="stylesheet" href="/src/popup.css" />
   </head>
   <body>
-    <main class="wrap">
-      <h1>Coral</h1>
-      <p class="muted">Extension foundations — UI ships in week 1.</p>
+    <main class="wrap" id="root" aria-live="polite">
+      <header>
+        <h1>Coral</h1>
+        <p class="muted" id="status">Loading…</p>
+      </header>
+
+      <section id="error-section" hidden>
+        <p class="error" id="error-text"></p>
+      </section>
+
+      <section id="offline-section" hidden>
+        <p>The Coral daemon isn't reachable on <code>127.0.0.1:8765</code>.</p>
+        <p class="muted">Start it with <code>coral start</code> in a terminal, then click below.</p>
+        <button id="retry-btn">Retry</button>
+      </section>
+
+      <section id="pair-section" hidden>
+        <p>Paste the handshake challenge from <code>coral start</code>:</p>
+        <input
+          type="text"
+          id="challenge-input"
+          placeholder="ABCD-EFGH-JKLM-NPQR"
+          autocomplete="off"
+          spellcheck="false"
+          aria-label="Handshake challenge"
+        />
+        <button id="pair-btn">Pair</button>
+      </section>
+
+      <section id="paired-section" hidden>
+        <div class="current-tab">
+          <p>Current tab origin:</p>
+          <code id="origin-text">—</code>
+          <button id="capture-btn" disabled>Capture session</button>
+        </div>
+
+        <div class="sessions">
+          <h2>Captured sessions</h2>
+          <ul id="sessions-list"></ul>
+          <p class="muted" id="empty-sessions">No sessions captured yet.</p>
+        </div>
+
+        <footer>
+          <button id="unpair-btn" class="link">Unpair this extension</button>
+        </footer>
+      </section>
     </main>
     <script type="module" src="/src/popup.ts"></script>
   </body>

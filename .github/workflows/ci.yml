@@ -43,10 +43,11 @@ jobs:
           node-version: "20"
           cache: npm
           cache-dependency-path: extension/package-lock.json
-      - name: Lint, typecheck, build
+      - name: Lint, typecheck, test, build
         working-directory: extension
         run: |
           npm ci
           npm run lint
           npm run typecheck
+          npm test
           npm run build

@@ -190,8 +190,8 @@ wheels = [
 ]
 
 [[package]]
-name = "coral"
-version = "0.1.0"
+name = "coralbridge"
+version = "0.5.0"
 source = { editable = "." }
 dependencies = [
     { name = "argon2-cffi" },

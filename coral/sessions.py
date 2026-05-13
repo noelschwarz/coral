@@ -22,6 +22,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import os
 import shutil
 import tempfile
 import time
@@ -126,6 +127,14 @@ def _pick_tcp_port() -> int:
         return int(s.getsockname()[1])
 
 
+CORAL_DAEMON_HOME_ENV = "CORAL_DAEMON_HOME"
+"""Env var injected into every Chromium child process.
+
+Used by :func:`recovery_kill_orphan_browsers` to identify browsers that
+survived a crashed previous daemon run for the *same* ``$CORAL_HOME``.
+"""
+
+
 class SessionServer:
     """Owns every open Playwright session for the daemon's lifetime."""
 
@@ -134,10 +143,12 @@ class SessionServer:
         *,
         vault: Vault,
         max_duration_minutes: int,
+        coral_home: Path | None = None,
         headless: bool = True,
     ) -> None:
         self._vault = vault
         self._max_duration_seconds = max_duration_minutes * 60
+        self._coral_home = coral_home
         self._headless = headless
         self._handles: dict[str, OpenSession] = {}
         self._lock = asyncio.Lock()
@@ -179,10 +190,16 @@ class SessionServer:
         # closing and Chromium starting.
         async with self._launch_lock:
             cdp_port = _pick_tcp_port()
+            # Tag the child Chromium with our coral_home so a future daemon
+            # restart can find and kill orphans from this run (spec §7.4).
+            child_env: dict[str, str | float | bool] = {k: v for k, v in os.environ.items()}
+            if self._coral_home is not None:
+                child_env[CORAL_DAEMON_HOME_ENV] = str(self._coral_home)
             try:
                 context = await pw.chromium.launch_persistent_context(
                     user_data_dir=str(user_data_dir),
                     headless=self._headless,
+                    env=child_env,
                     args=[
                         f"--remote-debugging-port={cdp_port}",
                         "--remote-debugging-address=127.0.0.1",
@@ -371,6 +388,52 @@ class SessionServer:
         )
 
 
-def recovery_kill_orphan_browsers() -> int:
-    """Best-effort cleanup hook (spec §7.4). Implementation lands in week 4 polish."""
-    return 0
+_CHROMIUM_PROCESS_NAMES = frozenset(
+    {
+        "chrome",
+        "chromium",
+        "chromium-browser",
+        "google-chrome",
+        "Google Chrome",
+        "Google Chrome Helper",
+        "chrome-headless-shell",
+        "chrome-mac",
+        "chrome.exe",
+    }
+)
+
+
+def recovery_kill_orphan_browsers(coral_home: Path) -> int:
+    """Best-effort cleanup of Chromium processes from a crashed previous daemon (§7.4).
+
+    Identifies survivors by matching the ``CORAL_DAEMON_HOME`` env var that
+    :class:`SessionServer.open` injects into every child Chromium. Only processes
+    tagged with *our* coral_home are killed — leaves other Coral daemons (running
+    against different homes) and unrelated browsers alone.
+
+    Returns the number of processes killed. Safe to call when the current daemon
+    has nothing open (returns 0 in the common case).
+    """
+    import psutil
+
+    target = str(coral_home)
+    killed = 0
+    for proc in psutil.process_iter(attrs=["pid", "name"]):
+        try:
+            name = proc.info.get("name") or ""
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+        if name not in _CHROMIUM_PROCESS_NAMES:
+            continue
+        try:
+            env = proc.environ()
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+        if env.get(CORAL_DAEMON_HOME_ENV) != target:
+            continue
+        try:
+            proc.kill()
+            killed += 1
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    return killed

@@ -7,11 +7,19 @@ on:
 
 jobs:
   python:
-    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
-      - name: Install SQLCipher (headers for sqlcipher3 source builds)
+      - name: Install SQLCipher headers (Linux)
+        if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y libsqlcipher-dev
+      - name: Install SQLCipher headers (macOS)
+        if: runner.os == 'macOS'
+        run: brew install sqlcipher
       - uses: astral-sh/setup-uv@v5
         with:
           enable-cache: true

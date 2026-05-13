@@ -12,7 +12,10 @@ from coral.vault import Vault, unlock_vault
 
 
 def test_package_version_matches_metadata() -> None:
-    assert coral.__version__ == metadata.version("coral")
+    # Distribution name was renamed to ``coralbridge`` in Track G; the import
+    # name stayed as ``coral``. ``importlib.metadata.version`` keys on the
+    # distribution name.
+    assert coral.__version__ == metadata.version("coralbridge")
 
 
 def test_schema_table_names_match_spec() -> None:

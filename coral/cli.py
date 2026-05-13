@@ -289,7 +289,7 @@ def mcp_stdio(
     async def _run() -> None:
         vault = await unlock_vault(home=coral_dir, passphrase=passphrase)
         try:
-            await run_mcp_stdio(vault=vault, agent_name=agent_name)
+            await run_mcp_stdio(vault=vault, agent_name=agent_name, coral_home=coral_dir)
         finally:
             await vault.close()
 

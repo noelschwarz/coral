@@ -195,6 +195,194 @@ def start(
         raise typer.Exit(code=1) from None
 
 
+@app.command("up")
+def up(
+    home: Path | None = typer.Option(None, "--home", help="Coral data directory."),
+    no_clipboard: bool = typer.Option(
+        False,
+        "--no-clipboard",
+        help="Don't copy the handshake challenge to the system clipboard.",
+    ),
+    foreground: bool = typer.Option(
+        False,
+        "--foreground",
+        "-f",
+        help="Run the daemon in the foreground instead of detaching it.",
+    ),
+) -> None:
+    """One-command setup: init the vault if needed, start the daemon, and copy
+    the handshake challenge to the clipboard.
+
+    Default behaviour daemonizes the daemon as a detached background process so
+    you can close your terminal. Use ``--foreground`` to keep it attached, or
+    ``coral install-service`` once you're ready for it to start automatically
+    on login.
+    """
+    import subprocess
+    import sys
+    import time as _time
+
+    coral_dir = _home(home)
+    os.environ["CORAL_HOME"] = str(coral_dir)
+
+    cfg = load_config()
+    if cfg.daemon_pid_file.is_file():
+        try:
+            pid = int(cfg.daemon_pid_file.read_text(encoding="utf-8").strip())
+        except ValueError:
+            cfg.daemon_pid_file.unlink(missing_ok=True)
+            pid = 0
+        if pid and pid_running(pid):
+            _present_pairing(coral_dir=coral_dir, no_clipboard=no_clipboard, already_up=True)
+            return
+        # Stale PID file — fall through and start fresh.
+        cfg.daemon_pid_file.unlink(missing_ok=True)
+
+    db_path = vault_db_path(coral_dir)
+    if not db_path.is_file():
+        typer.echo(f"Setting up Coral in {coral_dir} (first-time init)…")
+        passphrase = _new_passphrase_prompt()
+        if len(passphrase) < MIN_PASSPHRASE_LENGTH:
+            typer.secho(
+                f"Passphrase must be at least {MIN_PASSPHRASE_LENGTH} characters "
+                "(engineering spec §6.2 / T9).",
+                err=True,
+                fg=typer.colors.RED,
+            )
+            raise typer.Exit(code=2)
+        os.environ["CORAL_PASSPHRASE"] = passphrase
+
+        async def _do_init() -> None:
+            from coral.vault import seed_bundled_behavior_packs
+
+            ensure_config_file_exists(home=coral_dir)
+            vault = await Vault.initialize(coral_dir, passphrase)
+            try:
+                await seed_bundled_behavior_packs(vault)
+            finally:
+                await vault.close()
+
+        try:
+            asyncio.run(_do_init())
+        except VaultError as exc:
+            typer.secho(f"init failed: {exc}", err=True, fg=typer.colors.RED)
+            raise typer.Exit(code=1) from exc
+        typer.secho(f"✓ Vault created at {db_path}", fg=typer.colors.GREEN)
+    else:
+        # Vault exists; we still need a passphrase for `coral start`.
+        if not os.environ.get("CORAL_PASSPHRASE"):
+            passphrase = _unlock_passphrase_prompt()
+            os.environ["CORAL_PASSPHRASE"] = passphrase
+
+    if foreground:
+        typer.echo("Starting daemon in the foreground (Ctrl+C to stop)…")
+        try:
+            run_daemon_blocking(home=coral_dir, passphrase=os.environ["CORAL_PASSPHRASE"])
+        except (VaultLockedError, VaultIntegrityError):
+            typer.secho("Incorrect passphrase or vault corrupted.", err=True, fg=typer.colors.RED)
+            raise typer.Exit(code=1) from None
+        return
+
+    # Daemonize: detach the daemon into its own session so it survives the
+    # terminal closing. stdout/stderr → coral.log in CORAL_HOME.
+    log_path = coral_dir / "coral.log"
+    log_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(log_path, "ab", buffering=0) as log_fh:
+        proc = subprocess.Popen(
+            [sys.executable, "-m", "coral", "start", "--home", str(coral_dir)],
+            env={**os.environ, "CORAL_HOME": str(coral_dir)},
+            stdout=log_fh,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
+        )
+
+    typer.echo("Starting daemon…")
+    # Wait up to 15s for the daemon to come online + write the pairing file.
+    deadline = _time.monotonic() + 15.0
+    pairing_path = coral_dir / ".pairing_challenge"
+    while _time.monotonic() < deadline:
+        if proc.poll() is not None:
+            # Daemon exited; show the log tail and bail.
+            tail = (
+                log_path.read_text(encoding="utf-8", errors="replace")[-2000:]
+                if log_path.is_file()
+                else "(no log)"
+            )
+            typer.secho(
+                f"Daemon exited (code {proc.returncode}). Last log lines:\n\n{tail}",
+                err=True,
+                fg=typer.colors.RED,
+            )
+            raise typer.Exit(code=1)
+        if pairing_path.is_file() and cfg.daemon_pid_file.is_file():
+            break
+        _time.sleep(0.2)
+    else:
+        typer.secho(
+            "Daemon didn't come online in 15s. Check ~/.coral/coral.log.",
+            err=True,
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=1)
+
+    _present_pairing(coral_dir=coral_dir, no_clipboard=no_clipboard, already_up=False)
+
+
+def _present_pairing(*, coral_dir: Path, no_clipboard: bool, already_up: bool) -> None:
+    """Read the pairing challenge file, copy to clipboard, and print next steps."""
+    from coral.clipboard import copy_to_clipboard
+
+    pairing_path = coral_dir / ".pairing_challenge"
+    if not pairing_path.is_file():
+        if already_up:
+            typer.secho(
+                "Daemon is already running, but the pairing challenge file is gone "
+                "(consumed by a previous pair). If the Coral extension is already "
+                "paired, you're done — just open the popup. To force a re-pair, "
+                "restart the daemon: `coral stop && coral up`.",
+                fg=typer.colors.YELLOW,
+            )
+            return
+        typer.secho("Pairing challenge file missing — daemon may not be fully up yet.", err=True)
+        raise typer.Exit(code=1)
+
+    challenge = pairing_path.read_text(encoding="utf-8").strip()
+    copied = False if no_clipboard else copy_to_clipboard(challenge)
+
+    bar = "─" * 50
+    typer.echo("")
+    typer.secho(bar, fg=typer.colors.CYAN)
+    if already_up:
+        typer.secho("Coral daemon is already running.", fg=typer.colors.GREEN, bold=True)
+    else:
+        typer.secho("Coral daemon is up and running.", fg=typer.colors.GREEN, bold=True)
+    typer.secho(bar, fg=typer.colors.CYAN)
+    typer.echo("")
+    typer.echo("Pairing challenge:")
+    typer.secho(f"    {challenge}", bold=True)
+    typer.echo("")
+    if copied:
+        typer.secho("✓ Copied to your clipboard.", fg=typer.colors.GREEN)
+    elif not no_clipboard:
+        typer.secho(
+            "(Clipboard tool not found. Copy the challenge above by hand.)",
+            fg=typer.colors.YELLOW,
+        )
+    typer.echo("")
+    typer.echo("Next: click the Coral extension icon and click Pair.")
+    typer.echo("(The popup auto-detects the clipboard challenge.)")
+    typer.echo("")
+    typer.echo("Useful commands:")
+    typer.echo("  coral status     # check daemon liveness")
+    typer.echo("  coral list       # list captured sessions")
+    typer.echo("  coral stop       # stop the daemon")
+    typer.echo("")
+    typer.echo("For daily use, install as a service so the daemon starts on login:")
+    typer.echo("  coral install-service")
+    typer.echo("")
+
+
 @app.command("stop")
 def stop_cmd(
     home: Path | None = typer.Option(None, "--home", help="Coral data directory."),
@@ -710,6 +898,91 @@ def deny_cmd(
 ) -> None:
     """Deny a pending review."""
     _decide(review_id, "denied", home)
+
+
+# ---- install-service / uninstall-service ------------------------------------
+
+
+@app.command("install-service")
+def install_service_cmd(
+    home: Path | None = typer.Option(None, "--home", help="Coral data directory."),
+    passphrase_env: bool = typer.Option(
+        False,
+        "--passphrase-env",
+        help=(
+            "Write a CORAL_PASSPHRASE placeholder into the service file. "
+            "You'll need to edit it to your real passphrase before the service "
+            "can start. Convenient but puts the passphrase on disk (mode 0600). "
+            "Skip this flag to require manual `coral up` after each reboot."
+        ),
+    ),
+) -> None:
+    """Install Coral as a user-level OS service (launchd / systemd --user).
+
+    macOS and Linux only. On Windows, run ``coral up`` manually or use Task
+    Scheduler — see ADR-016.
+    """
+    from coral.service import (
+        Platform,
+        activate_service,
+        current_platform,
+        install_service,
+    )
+
+    plat = current_platform()
+    if plat is Platform.OTHER:
+        typer.secho(
+            "coral install-service supports macOS and Linux only. "
+            "On Windows, run `coral up` manually.",
+            err=True,
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=1)
+
+    coral_dir = _home(home)
+    result = install_service(coral_home=coral_dir, passphrase_env=passphrase_env)
+    typer.secho(f"✓ Wrote service file: {result.unit_path}", fg=typer.colors.GREEN)
+    if result.needs_passphrase_edit:
+        typer.secho(
+            "⚠  CORAL_PASSPHRASE placeholder in the service file. "
+            f"Edit {result.unit_path} and replace the placeholder with your "
+            "real passphrase, then re-run `coral install-service`.",
+            fg=typer.colors.YELLOW,
+        )
+        typer.echo("")
+        typer.echo("Not activating the service yet — fix the placeholder first.")
+        return
+
+    typer.echo("Activating service…")
+    ok, msg = activate_service()
+    if ok:
+        typer.secho(
+            "✓ Service is running. It will start automatically on login.",
+            fg=typer.colors.GREEN,
+        )
+        typer.echo("")
+        typer.echo("  coral status        # verify daemon liveness")
+        typer.echo("  coral uninstall-service   # remove it later")
+    else:
+        typer.secho("Service install wrote the file but couldn't activate:", err=True)
+        typer.echo(msg)
+        raise typer.Exit(code=1)
+
+
+@app.command("uninstall-service")
+def uninstall_service_cmd() -> None:
+    """Stop the OS-managed Coral service and remove its unit file."""
+    from coral.service import Platform, current_platform, uninstall_service
+
+    plat = current_platform()
+    if plat is Platform.OTHER:
+        typer.secho("Nothing to uninstall on this platform.", err=True)
+        raise typer.Exit(code=1)
+    ok, msg = uninstall_service()
+    typer.echo(msg)
+    if not ok:
+        raise typer.Exit(code=1)
+    typer.secho("✓ Service uninstalled.", fg=typer.colors.GREEN)
 
 
 # ---- diagnose ---------------------------------------------------------------

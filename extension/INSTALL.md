@@ -29,21 +29,22 @@ menu so the icon's always visible.
 
 In a terminal:
 
-```bash
-uv run coral start
+```sh
+uv run coral up
 ```
 
-The daemon prints a 4-group challenge:
+That command starts the daemon detached in the background **and copies the
+handshake challenge to your clipboard**.
 
-```
-Extension handshake challenge (paste into the Coral extension popup):
+In Chrome, click the Coral extension icon. The popup detects the clipboard
+challenge and pre-fills the input. Press **Pair**.
 
-    ABCD-EFGH-JKLM-NPQR
-```
+(The popup uses the `clipboardRead` MV3 permission; Chrome may prompt you
+the first time it's used.)
 
-In Chrome, click the Coral extension icon → paste the challenge → click
-**Pair**. The popup transitions to the paired state and shows your current
-tab's origin.
+For daily use, run `uv run coral install-service` once so the daemon auto-
+starts at login. You won't need to run `coral up` again unless you want a
+fresh handshake.
 
 ## Capture a session
 

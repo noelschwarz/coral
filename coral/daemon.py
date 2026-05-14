@@ -67,6 +67,15 @@ async def run_daemon(*, home: Path | None = None, passphrase: str) -> None:
         challenge=challenge,
         rate_limit_per_minute=cfg.handshake_rate_limit_per_minute,
     )
+    # Drop the challenge to $CORAL_HOME/.pairing_challenge (mode 0600) so
+    # ``coral up`` can pick it up and copy to the user's clipboard. Removed
+    # on shutdown so a stale file can't trick a future `coral up` into
+    # offering an already-consumed challenge. (Track K / ADR-016.)
+    pairing_path = cfg.coral_home / ".pairing_challenge"
+    pairing_path.parent.mkdir(parents=True, exist_ok=True)
+    pairing_path.write_text(challenge + "\n", encoding="utf-8")
+    with contextlib.suppress(OSError):
+        os.chmod(pairing_path, 0o600)
 
     vault_location = cfg.vault_path
     api_base = f"http://{cfg.http_host}:{cfg.http_port}"
@@ -163,6 +172,8 @@ async def run_daemon(*, home: Path | None = None, passphrase: str) -> None:
         pid_path.unlink(missing_ok=True)
         with contextlib.suppress(OSError):
             cfg.cli_token_path.unlink(missing_ok=True)
+        with contextlib.suppress(OSError):
+            pairing_path.unlink(missing_ok=True)
 
 
 def run_daemon_blocking(*, home: Path | None = None, passphrase: str) -> None:

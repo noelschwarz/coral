@@ -14,48 +14,52 @@ and the extension implements the spec §13.1 onboarding flow
 
 ## Install (current)
 
-`pip install coralbridge` isn't published yet (waiting on the extension; see ADR-013). For now:
+`pip install coralbridge` isn't published yet (waiting on the extension's Chrome Web Store submission; see ADR-013). For now:
 
-```bash
+```sh
 git clone https://github.com/noelschwarz/coral
 cd coral
 uv sync --all-extras
-uv run playwright install chromium   # ~150 MB
+uv run playwright install chromium
 ```
 
-Coral requires Python 3.11+. On Linux you need `libsqlcipher-dev` (`apt`/`brew`). macOS pulls in SQLCipher via `brew install sqlcipher`. Windows is not in the supported matrix yet.
+Coral requires Python 3.11+. On Linux you need `libsqlcipher-dev` (`apt install libsqlcipher-dev`). macOS pulls in SQLCipher via `brew install sqlcipher`. Windows is not in the supported matrix yet (per ADR-013).
 
-## Quickstart
+## Quickstart — 3 steps
 
-```bash
-# 1. Create an encrypted vault. Stores the captured-session state at rest.
-uv run coral init
+Open a terminal in the repo root:
 
-# 2. Start the daemon. Prints a handshake challenge on stdout.
-uv run coral start
-# Output includes:
-#     Coral daemon started.
-#     HTTP API: http://127.0.0.1:8765
-#     Extension handshake challenge (paste into the Coral extension popup):
-#
-#         ABCD-EFGH-JKLM-NPQR
-
-# 3. In another terminal, complete the handshake (the extension will do this; via curl for now):
-curl -s -X POST http://127.0.0.1:8765/auth/handshake \
-  -H "Content-Type: application/json" \
-  -d '{"challenge":"ABCD-EFGH-JKLM-NPQR","client_name":"curl"}'
-# {"token":"...","expires_at":...}
-
-# 4. Capture a session by POSTing the cookies + storage you want to lend the agent.
-TOKEN=...
-curl -s -X POST http://127.0.0.1:8765/sessions \
-  -H "Authorization: Bearer $TOKEN" \
-  -H "Content-Type: application/json" \
-  -d '{"origin":"https://github.com","state":{"version":1,"cookies":[…]}}'
-
-# 5. An agent connects via MCP (stdio or HTTP) and drives the session.
-#    See "End-to-end via MCP" below.
+```sh
+uv run coral up
 ```
+
+That single command:
+- Initializes the vault (prompts for a passphrase the first time).
+- Starts the daemon detached in the background.
+- **Copies the handshake challenge to your clipboard.**
+
+Then build and load the extension:
+
+```sh
+cd extension
+npm ci
+npm run build
+```
+
+In Chrome:
+1. `chrome://extensions` → enable **Developer mode** → **Load unpacked** → pick `extension/dist/`.
+2. Click the Coral icon. The popup detects the clipboard challenge and pre-fills the input.
+3. Press **Pair**.
+
+Done. Navigate to a site you're logged into → click the Coral icon → **Capture session**.
+
+### For daily use (optional but recommended)
+
+```sh
+uv run coral install-service
+```
+
+Writes a launchd LaunchAgent (macOS) or systemd `--user` unit (Linux) so the daemon auto-starts on login. No more "keep this terminal open."
 
 ## Daily-use commands
 
@@ -128,7 +132,7 @@ Each `coral_open_session` launches its own Chromium for isolation ([ADR-010](doc
 - [`SECURITY.md`](SECURITY.md) — vulnerability reporting policy.
 - [`docs/security-review-prep.md`](docs/security-review-prep.md) — briefing checklist for an external reviewer.
 - [`CHANGELOG.md`](CHANGELOG.md) — release history.
-- ADR series — `docs/ADR-006` through `docs/ADR-015` for individual decisions.
+- ADR series — `docs/ADR-006` through `docs/ADR-016` for individual decisions.
 
 ## Contributing
 

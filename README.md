@@ -128,7 +128,7 @@ Each `coral_open_session` launches its own Chromium for isolation ([ADR-010](doc
 - [`SECURITY.md`](SECURITY.md) — vulnerability reporting policy.
 - [`docs/security-review-prep.md`](docs/security-review-prep.md) — briefing checklist for an external reviewer.
 - [`CHANGELOG.md`](CHANGELOG.md) — release history.
-- ADR series — `docs/ADR-006` through `docs/ADR-014` for individual decisions.
+- ADR series — `docs/ADR-006` through `docs/ADR-015` for individual decisions.
 
 ## Contributing
 

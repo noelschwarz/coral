@@ -16,7 +16,15 @@ re-discover the same questions cold.
 
 ## Deferrals
 
-### 1. Vault writer cross-event-loop decoupling
+### 1. Vault writer cross-event-loop decoupling — **RESOLVED** (Track J', ADR-015)
+
+The architecture below is what was deferred. The fix shipped in Track J' /
+ADR-015: the worker is now an OS thread, the queue is ``queue.Queue``, and
+the per-call future is ``concurrent.futures.Future`` (wrapped via
+``asyncio.wrap_future`` at the call site). The MCP HTTP success-path
+``TestClient`` test (previously skipped under deferral #5) is now active in
+``tests/unit/test_mcp_server.py``.
+
 
 **The problem.** `Vault.initialize` / `Vault.open` start a writer task on the
 event loop that called them. The async `asyncio.Queue` and the per-write

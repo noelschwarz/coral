@@ -1,25 +1,30 @@
-"""Encrypted vault (SQLCipher) with serialized writes.
+"""Encrypted vault (SQLCipher) with a dedicated worker thread (ADR-015).
 
-SQLite ships a single writer; HTTP/MCP handlers may enqueue writes concurrently.
-Route mutations through :meth:`Vault._enqueue_write` so ordering stays predictable.
+SQLite + SQLCipher connections are not thread-safe; they must only be touched
+from the thread that opened them. We satisfy that by routing every
+read and every write through a single OS thread via a ``queue.Queue`` of
+``_WorkItem``s. Per-call ``concurrent.futures.Future`` instances bridge the
+worker thread back to whatever asyncio loop the caller happens to be on —
+which means the same ``Vault`` instance is safe to share across multiple
+asyncio loops (the cross-loop deadlock that bit Tracks B and D is gone).
 
-Reads may bypass the queue, but every SQLCipher call runs on a dedicated
-single-worker executor thread so the underlying connection never hops threads.
-
-Do **not** replace the write queue with a naive asyncio.Lock: it hides queue depth
-and complicates shutdown compared to an explicit writer task.
+Do **not** replace this with a naive ``asyncio.Lock`` + executor: it
+re-introduces the loop-bound primitive that caused the original bug.
 """
 
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
+import contextlib
 import json
+import queue
 import sqlite3
+import threading
 import time
 import uuid
 from base64 import b64decode, b64encode
 from collections.abc import Callable, Iterable
-from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final, NamedTuple, TypeVar, cast
@@ -44,7 +49,7 @@ from coral.models import (
     TokenRecord,
 )
 
-_WRITER_STOP: Final = object()
+_WORKER_STOP: Final = object()
 
 T = TypeVar("T")
 
@@ -95,10 +100,17 @@ class PlaintextVaultMeta:
         return cls(salt=salt, params=params)
 
 
-class _WriteCmd(NamedTuple):
-    sql: str
-    args: tuple[Any, ...]
-    fut: asyncio.Future[None]
+class _WorkItem(NamedTuple):
+    """One unit of work for the vault's worker thread.
+
+    ``fn`` runs synchronously in the worker thread (which owns the SQLCipher
+    connection). The result or exception lands in ``fut``, a
+    ``concurrent.futures.Future`` — loop-agnostic, so callers from any
+    asyncio loop can wrap it via ``asyncio.wrap_future`` (ADR-015).
+    """
+
+    fn: Callable[[], Any]
+    fut: concurrent.futures.Future[Any]
 
 
 def _zero_bytearray(buf: bytearray) -> None:
@@ -172,34 +184,90 @@ def _sync_applied_versions(conn: sqlcipher.Connection) -> set[int]:
 
 
 class Vault:
-    """Async façade over a synchronous SQLCipher connection (single worker thread)."""
+    """Async façade over a synchronous SQLCipher connection.
+
+    All connection access happens on a dedicated OS thread (the "worker"). The
+    queue is :class:`queue.Queue` and the per-call futures are
+    :class:`concurrent.futures.Future` — both loop-agnostic — so the vault is
+    safe to share across multiple asyncio event loops (ADR-015). This
+    decoupling was the cure for the cross-loop deadlock that bit Tracks B
+    and D: opening the vault on one loop and awaiting a write from another
+    loop now works correctly.
+
+    Reads and writes both pass through the same queue. SQLite serializes
+    commits anyway, so throughput is unchanged; correctness is significantly
+    better.
+    """
 
     def __init__(self, db_path: Path) -> None:
         self._path = db_path
-        self._executor = ThreadPoolExecutor(max_workers=1, thread_name_prefix="coral-vault")
         self._conn: sqlcipher.Connection | None = None
-        self._queue: asyncio.Queue[_WriteCmd | object] = asyncio.Queue()
-        self._writer_task: asyncio.Task[None] | None = None
+        self._cmd_queue: queue.Queue[_WorkItem | object] = queue.Queue()
+        self._worker_thread: threading.Thread | None = None
 
     async def _run_sync(self, fn: Callable[[], T]) -> T:
-        loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(self._executor, fn)
+        """Dispatch ``fn`` to the worker thread and await its result.
 
-    async def _shutdown_executor_pool(self) -> None:
-        await asyncio.to_thread(self._executor.shutdown, True)
+        Loop-agnostic: caller may be running on any asyncio loop. The
+        :class:`concurrent.futures.Future` we create is wrapped with
+        :func:`asyncio.wrap_future` against whichever loop is currently
+        running, so the dispatch is per-call rather than per-vault.
+        """
+        if self._worker_thread is None:
+            raise VaultError("Vault worker thread is not running.")
+        fut: concurrent.futures.Future[T] = concurrent.futures.Future()
+        self._cmd_queue.put(_WorkItem(fn=fn, fut=fut))
+        return await asyncio.wrap_future(fut)
+
+    def _start_worker(self) -> None:
+        """Spin up the worker thread. Called by ``open``/``initialize``."""
+        if self._worker_thread is not None:
+            raise VaultError("Vault worker thread already running.")
+
+        def runner() -> None:
+            while True:
+                item = self._cmd_queue.get()
+                if item is _WORKER_STOP:
+                    return
+                assert isinstance(item, _WorkItem)
+                try:
+                    result = item.fn()
+                    item.fut.set_result(result)
+                except BaseException as exc:  # noqa: BLE001 — re-raised via the future
+                    if not item.fut.done():
+                        item.fut.set_exception(exc)
+
+        self._worker_thread = threading.Thread(
+            target=runner,
+            name="coral-vault-worker",
+            daemon=True,
+        )
+        self._worker_thread.start()
+
+    async def _stop_worker(self) -> None:
+        """Drain pending work, signal stop, and join the thread."""
+        if self._worker_thread is None:
+            return
+        self._cmd_queue.put(_WORKER_STOP)
+        await asyncio.to_thread(self._worker_thread.join, 10.0)
+        if self._worker_thread.is_alive():
+            # Unexpected: a 10-second join should be more than enough for the
+            # worker to process any in-flight item plus the stop sentinel.
+            raise VaultError("Vault worker thread did not stop in 10s.")
+        self._worker_thread = None
 
     @classmethod
     async def open(cls, path: Path, key: bytearray, *, plaintext_meta: PlaintextVaultMeta) -> Vault:
         """Unlock an existing vault and verify encrypted metadata."""
         self = cls(path)
-        await self._connect(key)
+        self._start_worker()
         try:
+            await self._connect(key)
             await self._apply_pending_migrations()
             await self._verify_encrypted_meta(plaintext_meta)
         except VaultError:
             await self._dispose_connection_only()
             raise
-        self._start_writer()
         _zero_bytearray(key)
         return self
 
@@ -223,6 +291,7 @@ class Vault:
         db_path.parent.mkdir(parents=True, exist_ok=True)
         key = derive_key(passphrase, meta.salt, params=params)
         self = cls(db_path)
+        self._start_worker()
         try:
             await self._connect(key)
             await self._apply_pending_migrations()
@@ -231,15 +300,10 @@ class Vault:
         except VaultError:
             await self._dispose_connection_only()
             raise
-        self._start_writer()
         _zero_bytearray(key)
         return self
 
     async def close(self) -> None:
-        if self._writer_task is not None:
-            await self._queue.put(_WRITER_STOP)
-            await self._writer_task
-            self._writer_task = None
         if self._conn is not None:
             conn = self._conn
             self._conn = None
@@ -248,7 +312,7 @@ class Vault:
                 conn.close()
 
             await self._run_sync(close_conn)
-        await self._shutdown_executor_pool()
+        await self._stop_worker()
 
     async def insert_session(self, session: SessionRecord) -> None:
         sql = """
@@ -619,10 +683,7 @@ class Vault:
             raise VaultLockedError("Incorrect passphrase or vault corrupted.") from exc
 
     async def _dispose_connection_only(self) -> None:
-        if self._writer_task is not None:
-            await self._queue.put(_WRITER_STOP)
-            await self._writer_task
-            self._writer_task = None
+        """Tear-down path for errors during ``open``/``initialize``."""
         if self._conn is not None:
             conn = self._conn
             self._conn = None
@@ -630,8 +691,13 @@ class Vault:
             def close_conn() -> None:
                 conn.close()
 
-            await self._run_sync(close_conn)
-        await self._shutdown_executor_pool()
+            try:
+                await self._run_sync(close_conn)
+            except VaultError:
+                # Worker thread already gone — best-effort close in this thread.
+                with contextlib.suppress(Exception):
+                    conn.close()
+        await self._stop_worker()
 
     async def _apply_pending_migrations(self) -> None:
         conn = self._require_conn()
@@ -710,41 +776,22 @@ class Vault:
 
         await self._run_sync(verify)
 
-    def _start_writer(self) -> None:
-        if self._writer_task is not None:
-            raise VaultError("Writer task already running.")
-
-        async def _runner() -> None:
-            conn = self._require_conn()
-            while True:
-                item = await self._queue.get()
-                try:
-                    if item is _WRITER_STOP:
-                        break
-                    assert isinstance(item, _WriteCmd)
-
-                    def apply_write(
-                        _sql: str = item.sql,
-                        _args: tuple[Any, ...] = item.args,
-                    ) -> None:
-                        conn.execute(_sql, _args)
-                        conn.commit()
-
-                    await self._run_sync(apply_write)
-                    item.fut.set_result(None)
-                except BaseException as exc:
-                    if isinstance(item, _WriteCmd) and not item.fut.done():
-                        item.fut.set_exception(exc)
-                    else:
-                        raise
-
-        self._writer_task = asyncio.create_task(_runner(), name="coral-vault-writer")
-
     async def _enqueue_write(self, sql: str, args: Iterable[Any]) -> None:
-        loop = asyncio.get_running_loop()
-        fut: asyncio.Future[None] = loop.create_future()
-        await self._queue.put(_WriteCmd(sql, tuple(args), fut))
-        await fut
+        """Submit a mutating SQL statement to the worker thread.
+
+        Identical scheduling to reads (single queue, single worker thread).
+        SQLite serializes commits anyway; routing writes through the same
+        worker is the cleanest way to keep "exactly one thread touches the
+        connection" true.
+        """
+        conn = self._require_conn()
+        materialized_args = tuple(args)
+
+        def apply_write() -> None:
+            conn.execute(sql, materialized_args)
+            conn.commit()
+
+        await self._run_sync(apply_write)
 
 
 async def unlock_vault(*, home: Path, passphrase: str) -> Vault:

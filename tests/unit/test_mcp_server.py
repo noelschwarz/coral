@@ -160,15 +160,53 @@ async def test_authed_mcp_http_rejects_unknown_token(runtime_vault: Vault) -> No
     assert any(r.event_type == "auth.failed" and "mcp-http" in r.detail for r in rows)
 
 
-# Note: the success-path test for the MCP HTTP middleware is intentionally absent.
-# FastMCP's streamable_http_app needs Starlette's lifespan to initialize its session
-# manager (TestClient handles that), but the bearer middleware needs an awaitable
-# vault — and the vault's writer task is bound to whichever event loop opened it.
-# Mixing a sync TestClient (which runs requests on a portal loop) with an async-loop-
-# bound vault is the same cross-loop deadlock that caused the original test_auth.py
-# hang. The middleware's success branch is a single ``await call_next(request)`` with
-# no Coral-specific logic; the auth-rejection paths above + the stdio integration
-# test (which exercises the same FastMCP) cover everything material.
+def test_authed_mcp_http_accepts_valid_token(
+    tmp_path_factory: pytest.TempPathFactory,
+) -> None:
+    """Success-path for the MCP HTTP bearer middleware (Track J' / ADR-015).
+
+    Pre-Track-J' this test would have deadlocked: Starlette's sync
+    ``TestClient`` runs requests on a portal loop, but the vault used to be
+    pinned to the loop that opened it. With the worker-thread architecture,
+    the vault is loop-agnostic and this success path can be exercised.
+    """
+    import asyncio as _asyncio
+
+    home = tmp_path_factory.mktemp("mcp_http_authed")
+    vault = _asyncio.run(Vault.initialize(home, "correct horse battery staple", params=TEST_PARAMS))
+    raw = generate_token()
+    _asyncio.run(
+        vault.insert_token(hash_token(raw), name="agent-test", expires_at=int(time.time()) + 60)
+    )
+    set_runtime(MCPRuntime(vault=vault, agent_name="pytest"))
+    try:
+        mcp = build_mcp_server()
+        app = build_authed_mcp_http_app(mcp, vault=vault)
+        body = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": "2024-11-05",
+                "capabilities": {},
+                "clientInfo": {"name": "agent-test", "version": "0"},
+            },
+        }
+        with TestClient(app) as client:
+            resp = client.post(
+                "/mcp",
+                json=body,
+                headers={
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                    "Authorization": f"Bearer {raw}",
+                },
+            )
+        assert resp.status_code == 200
+        assert resp.json()["result"]["serverInfo"]["name"] == "coral"
+    finally:
+        set_runtime(None)
+        _asyncio.run(vault.close())
 
 
 def test_mcp_streamable_http_initialize() -> None:

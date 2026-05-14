@@ -10,17 +10,21 @@ Each install path writes a service file owned by the user (mode 0600 for the
 plist on macOS since it can carry env vars, 0644 for the systemd unit), then
 runs the OS-specific "load + enable + start" sequence.
 
-We deliberately do **not** write the user's vault passphrase into the service
-config. The service unit invokes ``coral start`` which prompts via TTY (or
-reads ``CORAL_PASSPHRASE`` from the user's environment). Operationally this
-means the user has two choices:
+The service unit invokes ``coral start`` which resolves the passphrase in this
+order: ``CORAL_PASSPHRASE`` env → OS keychain (ADR-017) → TTY prompt → fail.
+The default ``coral install-service`` flow stores the passphrase in the OS
+keychain so the daemon can start headless without secrets on disk.
 
-1. Run ``coral install-service`` and start the daemon manually after each
-   reboot via ``coral up`` (no passphrase on disk).
-2. Set ``CORAL_PASSPHRASE`` in their shell init / launchd plist
-   ``EnvironmentVariables`` (passphrase on disk, mode 0600).
+Three flows are surfaced:
 
-The CLI surfaces this choice as a confirm prompt at install time.
+1. **Default (keychain).** ``coral install-service`` prompts for the passphrase,
+   verifies it unlocks the vault, and stashes it via ``coral.keychain``. No
+   secrets on disk; daemon comes up automatically at login.
+2. **--passphrase-env.** The service file gets a ``CORAL_PASSPHRASE`` placeholder
+   the user edits to their real passphrase (file mode 0600). Fallback for
+   environments without a keychain backend.
+3. **--no-keychain.** No passphrase anywhere; user runs ``coral up`` manually
+   after each reboot.
 """
 
 from __future__ import annotations
@@ -101,7 +105,7 @@ def _macos_plist(
         f"      <key>CORAL_HOME</key><string>{_xml_escape(str(coral_home))}</string>\n"
         + (
             "      <key>CORAL_PASSPHRASE</key>"
-            "<string>__SET_THIS_IN_YOUR_PLIST_OR_USE_KEYCHAIN__</string>\n"
+            "<string>__SET_THIS_TO_YOUR_VAULT_PASSPHRASE__</string>\n"
             if passphrase_env
             else ""
         )
@@ -151,7 +155,7 @@ def _linux_unit(
     log_path = coral_home / "coral.log"
     env_lines = [f"Environment=CORAL_HOME={coral_home}"]
     if passphrase_env:
-        env_lines.append("Environment=CORAL_PASSPHRASE=__SET_THIS_IN_YOUR_UNIT_OR_USE_KEYCHAIN__")
+        env_lines.append("Environment=CORAL_PASSPHRASE=__SET_THIS_TO_YOUR_VAULT_PASSPHRASE__")
     env_block = "\n".join(env_lines)
     return f"""[Unit]
 Description=Coral local-first session bridge daemon

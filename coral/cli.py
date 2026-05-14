@@ -74,10 +74,42 @@ def _new_passphrase_prompt() -> str:
     return first
 
 
-def _unlock_passphrase_prompt() -> str:
+def _unlock_passphrase_prompt(coral_home: Path | None = None) -> str:
+    """Resolve a passphrase for unlocking an existing vault.
+
+    Order: ``CORAL_PASSPHRASE`` env var → OS keychain (if a ``coral_home`` is
+    given and a backend is available) → interactive prompt. If none of those
+    yield a passphrase and there's no TTY (e.g. launchd/systemd-loaded daemon),
+    exits with a clear message instead of hanging.
+    """
     env = os.environ.get("CORAL_PASSPHRASE", "").strip()
     if env:
         return env
+    if coral_home is not None:
+        from coral import keychain as kc
+
+        if kc.is_available():
+            try:
+                return kc.retrieve(coral_home)
+            except kc.KeychainNotFound:
+                pass
+            except kc.KeychainError as exc:
+                typer.secho(
+                    f"keychain read failed ({exc}); falling back to prompt.",
+                    err=True,
+                    fg=typer.colors.YELLOW,
+                )
+    import sys as _sys
+
+    if not _sys.stdin.isatty():
+        typer.secho(
+            "No CORAL_PASSPHRASE in environment, no keychain entry, and no TTY "
+            "to prompt. Run `coral keychain store` to stash the passphrase, or "
+            "set CORAL_PASSPHRASE.",
+            err=True,
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=1)
     return typer.prompt("Vault passphrase", hide_input=True)
 
 
@@ -180,7 +212,7 @@ def start(
             typer.secho(f"Removing stale PID file (PID {pid} not running).", fg=typer.colors.YELLOW)
             pid_path.unlink(missing_ok=True)
 
-    passphrase = _unlock_passphrase_prompt()
+    passphrase = _unlock_passphrase_prompt(coral_dir)
 
     ensure_config_file_exists(home=coral_dir)
 
@@ -271,7 +303,7 @@ def up(
     else:
         # Vault exists; we still need a passphrase for `coral start`.
         if not os.environ.get("CORAL_PASSPHRASE"):
-            passphrase = _unlock_passphrase_prompt()
+            passphrase = _unlock_passphrase_prompt(coral_dir)
             os.environ["CORAL_PASSPHRASE"] = passphrase
 
     if foreground:
@@ -472,7 +504,7 @@ def mcp_stdio(
 
     coral_dir = _home(home)
     os.environ["CORAL_HOME"] = str(coral_dir)
-    passphrase = _unlock_passphrase_prompt()
+    passphrase = _unlock_passphrase_prompt(coral_dir)
 
     async def _run() -> None:
         vault = await unlock_vault(home=coral_dir, passphrase=passphrase)
@@ -686,7 +718,7 @@ def _panic_via_vault(coral_dir: Path) -> None:
 
     from coral.vault import unlock_vault
 
-    passphrase = _unlock_passphrase_prompt()
+    passphrase = _unlock_passphrase_prompt(coral_dir)
 
     async def _run() -> None:
         vault = await unlock_vault(home=coral_dir, passphrase=passphrase)
@@ -900,6 +932,138 @@ def deny_cmd(
     _decide(review_id, "denied", home)
 
 
+# ---- keychain ---------------------------------------------------------------
+
+
+keychain_app = typer.Typer(
+    no_args_is_help=True,
+    help="Manage the OS-keychain-stored vault passphrase (ADR-017).",
+)
+app.add_typer(keychain_app, name="keychain")
+
+
+@keychain_app.command("store")
+def keychain_store_cmd(
+    home: Path | None = typer.Option(None, "--home", help="Coral data directory."),
+) -> None:
+    """Prompt for the vault passphrase and store it in the OS keychain.
+
+    Verifies the passphrase actually unlocks the vault before storing.
+    """
+    from coral import keychain as kc
+    from coral.vault import unlock_vault
+
+    coral_dir = _home(home)
+
+    if not kc.is_available():
+        typer.secho(
+            "OS keychain not available on this platform. "
+            "macOS needs `security` (always present); Linux needs `secret-tool` "
+            "from libsecret-tools.",
+            err=True,
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=1)
+
+    db_path = vault_db_path(coral_dir)
+    if not db_path.is_file():
+        typer.secho(
+            f"No vault at {db_path}. Run `coral up` first to create one.",
+            err=True,
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=1)
+
+    passphrase = os.environ.get("CORAL_PASSPHRASE", "").strip()
+    if not passphrase:
+        passphrase = typer.prompt("Vault passphrase", hide_input=True)
+
+    async def _verify() -> None:
+        vault = await unlock_vault(home=coral_dir, passphrase=passphrase)
+        await vault.close()
+
+    try:
+        asyncio.run(_verify())
+    except (VaultLockedError, VaultIntegrityError):
+        typer.secho(
+            "That passphrase doesn't unlock the vault — nothing stored.",
+            err=True,
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=1) from None
+
+    try:
+        kc.store(coral_dir, passphrase)
+    except kc.KeychainError as exc:
+        typer.secho(f"keychain store failed: {exc}", err=True, fg=typer.colors.RED)
+        raise typer.Exit(code=1) from exc
+
+    typer.secho(
+        f"✓ Stored passphrase for {coral_dir} in the OS keychain.",
+        fg=typer.colors.GREEN,
+    )
+
+
+@keychain_app.command("clear")
+def keychain_clear_cmd(
+    home: Path | None = typer.Option(None, "--home", help="Coral data directory."),
+) -> None:
+    """Remove the stored passphrase from the OS keychain. Idempotent."""
+    from coral import keychain as kc
+
+    coral_dir = _home(home)
+    if not kc.is_available():
+        typer.secho(
+            "OS keychain not available on this platform.",
+            err=True,
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=1)
+
+    try:
+        removed = kc.delete(coral_dir)
+    except kc.KeychainError as exc:
+        typer.secho(f"keychain clear failed: {exc}", err=True, fg=typer.colors.RED)
+        raise typer.Exit(code=1) from exc
+
+    if removed:
+        typer.secho("✓ Removed keychain entry.", fg=typer.colors.GREEN)
+    else:
+        typer.echo("No keychain entry to remove (already absent).")
+
+
+@keychain_app.command("status")
+def keychain_status_cmd(
+    home: Path | None = typer.Option(None, "--home", help="Coral data directory."),
+) -> None:
+    """Print whether a passphrase is stored for this CORAL_HOME."""
+    import sys as _sys
+
+    from coral import keychain as kc
+
+    coral_dir = _home(home)
+    typer.echo(f"Coral home: {coral_dir}")
+    if not kc.is_available():
+        typer.echo(f"Backend:    unavailable (platform={_sys.platform})")
+        if _sys.platform.startswith("linux"):
+            typer.echo("            install `libsecret-tools` to enable.")
+        return
+
+    backend = (
+        "macOS Keychain (security)" if _sys.platform == "darwin" else "libsecret (secret-tool)"
+    )
+    typer.echo(f"Backend:    {backend}")
+    try:
+        kc.retrieve(coral_dir)
+    except kc.KeychainNotFound:
+        typer.echo("Entry:      not stored")
+        return
+    except kc.KeychainError as exc:
+        typer.echo(f"Entry:      error ({exc})")
+        return
+    typer.echo("Entry:      present")
+
+
 # ---- install-service / uninstall-service ------------------------------------
 
 
@@ -910,14 +1074,32 @@ def install_service_cmd(
         False,
         "--passphrase-env",
         help=(
-            "Write a CORAL_PASSPHRASE placeholder into the service file. "
-            "You'll need to edit it to your real passphrase before the service "
-            "can start. Convenient but puts the passphrase on disk (mode 0600). "
-            "Skip this flag to require manual `coral up` after each reboot."
+            "Write a CORAL_PASSPHRASE placeholder into the service file instead "
+            "of using the OS keychain. You'll need to edit it to your real "
+            "passphrase before the service can start. Convenient but puts the "
+            "passphrase on disk (mode 0600)."
+        ),
+    ),
+    no_keychain: bool = typer.Option(
+        False,
+        "--no-keychain",
+        help=(
+            "Don't store the passphrase in the OS keychain. The service file "
+            "will have no passphrase anywhere; the daemon won't start until you "
+            "run `coral up` manually after each reboot."
         ),
     ),
 ) -> None:
     """Install Coral as a user-level OS service (launchd / systemd --user).
+
+    By default, prompts for the vault passphrase, verifies it, and stores it in
+    the OS keychain (macOS Keychain Access / Linux Secret Service). The service
+    file contains no secrets, and the daemon reads the passphrase from the
+    keychain on startup.
+
+    Use ``--passphrase-env`` to put the passphrase in the service file (mode
+    0600) instead, or ``--no-keychain`` to require manual `coral up` after
+    every reboot.
 
     macOS and Linux only. On Windows, run ``coral up`` manually or use Task
     Scheduler — see ADR-016.
@@ -939,7 +1121,19 @@ def install_service_cmd(
         )
         raise typer.Exit(code=1)
 
+    if passphrase_env and no_keychain:
+        typer.secho(
+            "--passphrase-env and --no-keychain are mutually exclusive.",
+            err=True,
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=2)
+
     coral_dir = _home(home)
+    use_keychain = not passphrase_env and not no_keychain
+    if use_keychain:
+        _ensure_keychain_passphrase(coral_dir)
+
     result = install_service(coral_home=coral_dir, passphrase_env=passphrase_env)
     typer.secho(f"✓ Wrote service file: {result.unit_path}", fg=typer.colors.GREEN)
     if result.needs_passphrase_edit:
@@ -969,9 +1163,94 @@ def install_service_cmd(
         raise typer.Exit(code=1)
 
 
+def _ensure_keychain_passphrase(coral_dir: Path) -> None:
+    """For ``install-service``: ensure the OS keychain holds a valid passphrase
+    for ``coral_dir``. Prompts, verifies against the vault, and stores."""
+    from coral import keychain as kc
+
+    if not kc.is_available():
+        typer.secho(
+            "OS keychain not available on this platform. Re-run with "
+            "`--passphrase-env` (writes the passphrase to the service file) "
+            "or `--no-keychain` (you'll run `coral up` manually after reboot).",
+            err=True,
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=1)
+
+    db_path = vault_db_path(coral_dir)
+    if not db_path.is_file():
+        typer.secho(
+            f"No vault at {db_path}. Run `coral up` first to create one.",
+            err=True,
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=1)
+
+    from coral.vault import unlock_vault
+
+    async def _passphrase_unlocks(pw: str) -> bool:
+        try:
+            vault = await unlock_vault(home=coral_dir, passphrase=pw)
+        except (VaultLockedError, VaultIntegrityError):
+            return False
+        await vault.close()
+        return True
+
+    # Reuse an existing keychain entry only if it still unlocks the vault —
+    # otherwise the daemon would fail at startup and the user would have to
+    # debug a service that "installed successfully" but doesn't run.
+    try:
+        existing = kc.retrieve(coral_dir)
+    except kc.KeychainNotFound:
+        existing = None
+    except kc.KeychainError as exc:
+        typer.secho(f"keychain lookup failed: {exc}", err=True, fg=typer.colors.YELLOW)
+        existing = None
+
+    if existing is not None:
+        if asyncio.run(_passphrase_unlocks(existing)):
+            typer.echo("Using existing keychain entry for the vault passphrase.")
+            return
+        typer.secho(
+            "Stored keychain passphrase no longer unlocks the vault — re-prompting.",
+            fg=typer.colors.YELLOW,
+        )
+
+    passphrase = os.environ.get("CORAL_PASSPHRASE", "").strip()
+    if not passphrase:
+        passphrase = typer.prompt(
+            "Vault passphrase (will be stored in the OS keychain)", hide_input=True
+        )
+
+    if not asyncio.run(_passphrase_unlocks(passphrase)):
+        typer.secho(
+            "That passphrase doesn't unlock the vault — nothing stored.",
+            err=True,
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=1)
+
+    try:
+        kc.store(coral_dir, passphrase)
+    except kc.KeychainError as exc:
+        typer.secho(f"keychain store failed: {exc}", err=True, fg=typer.colors.RED)
+        raise typer.Exit(code=1) from exc
+
+    typer.secho("✓ Stored passphrase in the OS keychain.", fg=typer.colors.GREEN)
+
+
 @app.command("uninstall-service")
-def uninstall_service_cmd() -> None:
-    """Stop the OS-managed Coral service and remove its unit file."""
+def uninstall_service_cmd(
+    home: Path | None = typer.Option(None, "--home", help="Coral data directory."),
+    keep_keychain: bool = typer.Option(
+        False,
+        "--keep-keychain",
+        help="Don't remove the OS-keychain passphrase entry.",
+    ),
+) -> None:
+    """Stop the OS-managed Coral service, remove its unit file, and clear the
+    keychain passphrase entry (use ``--keep-keychain`` to preserve it)."""
     from coral.service import Platform, current_platform, uninstall_service
 
     plat = current_platform()
@@ -982,6 +1261,21 @@ def uninstall_service_cmd() -> None:
     typer.echo(msg)
     if not ok:
         raise typer.Exit(code=1)
+
+    if not keep_keychain:
+        from coral import keychain as kc
+
+        if kc.is_available():
+            coral_dir = _home(home)
+            try:
+                if kc.delete(coral_dir):
+                    typer.echo("Removed keychain passphrase entry.")
+            except kc.KeychainError as exc:
+                typer.secho(
+                    f"(could not clear keychain entry: {exc})",
+                    fg=typer.colors.YELLOW,
+                )
+
     typer.secho("✓ Service uninstalled.", fg=typer.colors.GREEN)
 
 

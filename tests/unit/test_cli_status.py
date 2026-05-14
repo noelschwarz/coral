@@ -113,6 +113,75 @@ def test_up_help_documents_foreground_and_no_clipboard(monkeypatch) -> None:
     assert "--no-clipboard" in stdout
 
 
+def test_install_service_help_mentions_keychain_default(monkeypatch) -> None:
+    monkeypatch.delenv("CORAL_HOME", raising=False)
+    result = runner.invoke(app, ["install-service", "--help"])
+    assert result.exit_code == 0
+    stdout = _strip_ansi(result.stdout)
+    assert "--no-keychain" in stdout
+    assert "keychain" in stdout.lower()
+
+
+def test_keychain_help_lists_subcommands(monkeypatch) -> None:
+    monkeypatch.delenv("CORAL_HOME", raising=False)
+    result = runner.invoke(app, ["keychain", "--help"])
+    assert result.exit_code == 0
+    stdout = _strip_ansi(result.stdout)
+    for sub in ("store", "clear", "status"):
+        assert sub in stdout
+
+
+def test_keychain_status_reports_no_entry(tmp_path, monkeypatch) -> None:
+    """Status should run even when nothing is stored. Mocks ``is_available``
+    so the test works on CI runners without a keychain backend."""
+    from coral import keychain as kc
+
+    monkeypatch.setattr(kc, "is_available", lambda: True)
+
+    def _not_found(_home):
+        raise kc.KeychainNotFound("missing")
+
+    monkeypatch.setattr(kc, "retrieve", _not_found)
+
+    result = runner.invoke(app, ["keychain", "status", "--home", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "not stored" in result.stdout
+
+
+def test_keychain_status_reports_unavailable_backend(tmp_path, monkeypatch) -> None:
+    from coral import keychain as kc
+
+    monkeypatch.setattr(kc, "is_available", lambda: False)
+    result = runner.invoke(app, ["keychain", "status", "--home", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "unavailable" in result.stdout
+
+
+def test_keychain_clear_unavailable_backend_exits_nonzero(tmp_path, monkeypatch) -> None:
+    from coral import keychain as kc
+
+    monkeypatch.setattr(kc, "is_available", lambda: False)
+    result = runner.invoke(app, ["keychain", "clear", "--home", str(tmp_path)])
+    assert result.exit_code == 1
+
+
+def test_keychain_clear_reports_idempotent_no_op(tmp_path, monkeypatch) -> None:
+    from coral import keychain as kc
+
+    monkeypatch.setattr(kc, "is_available", lambda: True)
+    monkeypatch.setattr(kc, "delete", lambda _home: False)
+    result = runner.invoke(app, ["keychain", "clear", "--home", str(tmp_path)])
+    assert result.exit_code == 0
+    assert "No keychain entry" in result.stdout
+
+
+def test_install_service_rejects_conflicting_flags(tmp_path, monkeypatch) -> None:
+    monkeypatch.setenv("CORAL_HOME", str(tmp_path))
+    result = runner.invoke(app, ["install-service", "--passphrase-env", "--no-keychain"])
+    assert result.exit_code == 2
+    assert "mutually exclusive" in (result.stdout + result.stderr)
+
+
 # Make sure none of these tests leak CORAL_HOME into the rest of the suite.
 def teardown_module() -> None:
     os.environ.pop("CORAL_HOME", None)

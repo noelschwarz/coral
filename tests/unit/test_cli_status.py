@@ -8,12 +8,21 @@ commands and exercise the easy paths so the no-daemon branches don't rot.
 from __future__ import annotations
 
 import os
+import re
 
 from typer.testing import CliRunner
 
 from coral.cli import app
 
 runner = CliRunner()
+
+_ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def _strip_ansi(s: str) -> str:
+    """Rich emits per-span styling (bold/dim) even with NO_COLOR, which splits
+    flag names across ANSI sequences. Strip them for substring assertions."""
+    return _ANSI_RE.sub("", s)
 
 
 def test_status_no_daemon(tmp_path, monkeypatch) -> None:
@@ -92,15 +101,16 @@ def test_install_service_help_lists_passphrase_env_flag(monkeypatch) -> None:
     monkeypatch.delenv("CORAL_HOME", raising=False)
     result = runner.invoke(app, ["install-service", "--help"])
     assert result.exit_code == 0
-    assert "passphrase-env" in result.stdout
+    assert "passphrase-env" in _strip_ansi(result.stdout)
 
 
 def test_up_help_documents_foreground_and_no_clipboard(monkeypatch) -> None:
     monkeypatch.delenv("CORAL_HOME", raising=False)
     result = runner.invoke(app, ["up", "--help"])
     assert result.exit_code == 0
-    assert "--foreground" in result.stdout
-    assert "--no-clipboard" in result.stdout
+    stdout = _strip_ansi(result.stdout)
+    assert "--foreground" in stdout
+    assert "--no-clipboard" in stdout
 
 
 # Make sure none of these tests leak CORAL_HOME into the rest of the suite.

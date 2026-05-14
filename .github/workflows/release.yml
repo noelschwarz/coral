@@ -1,0 +1,155 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  # Allow a dry-run from the Actions UI to test the build pipeline without
+  # actually publishing anything.
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Build artifacts but skip the PyPI publish step"
+        type: boolean
+        default: true
+
+permissions:
+  contents: write # for creating GitHub releases
+  id-token: write # for trusted publishing to PyPI (when we wire that up)
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install SQLCipher headers
+        run: sudo apt-get update && sudo apt-get install -y libsqlcipher-dev
+
+      - uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Sync dependencies
+        run: uv sync --all-extras
+
+      - name: Verify quality gates before building
+        run: |
+          uv run ruff check coral tests
+          uv run ruff format --check coral tests
+          uv run pyright
+          uv run playwright install chromium --with-deps
+          uv run pytest --cov=coral
+
+      - name: Build sdist + wheel
+        run: uv build
+
+      - name: Compute SHA-256 checksums
+        run: |
+          cd dist
+          sha256sum *.tar.gz *.whl > SHA256SUMS
+          cat SHA256SUMS
+
+      - name: Extract version
+        id: version
+        run: |
+          set -e
+          # Tag form `v0.5.0` → output `0.5.0`. Manual dispatch carries no
+          # tag; fall back to the pyproject version (still meaningful for a
+          # dry-run build verification).
+          if [[ "${GITHUB_REF}" == refs/tags/v* ]]; then
+            echo "version=${GITHUB_REF##refs/tags/v}" >> "$GITHUB_OUTPUT"
+          else
+            python -c "import tomllib; print('version=' + tomllib.loads(open('pyproject.toml','rb').read().decode())['project']['version'])" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Verify pyproject version matches the tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        run: |
+          set -e
+          tag_version="${GITHUB_REF##refs/tags/v}"
+          pyproject_version=$(python -c "import tomllib; print(tomllib.loads(open('pyproject.toml','rb').read().decode())['project']['version'])")
+          if [[ "$tag_version" != "$pyproject_version" ]]; then
+            echo "::error::tag $tag_version does not match pyproject.toml version $pyproject_version"
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      - name: Draft GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true # human reviews before publishing
+          generate_release_notes: true
+          name: "coralbridge ${{ needs.build.outputs.version }}"
+          body: |
+            ## coralbridge `v${{ needs.build.outputs.version }}`
+
+            See [CHANGELOG.md](https://github.com/noelschwarz/coral/blob/v${{ needs.build.outputs.version }}/CHANGELOG.md)
+            for the full release notes.
+
+            **Before publishing this draft:**
+            - [ ] Run the linked CI run end-to-end on macOS (manual today)
+            - [ ] Verify SHA-256 sums match `dist/SHA256SUMS`
+            - [ ] Confirm the threat-model document reflects what's in the build
+            - [ ] Confirm no `Partial` status remains in `THREAT_MODEL.md` §6.2
+
+            **Install:**
+
+            ```bash
+            pip install coralbridge==${{ needs.build.outputs.version }}
+            ```
+          files: |
+            dist/*.tar.gz
+            dist/*.whl
+            dist/SHA256SUMS
+
+  publish-pypi:
+    needs: [build, release]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    # Manual gate: the `pypi` environment requires a reviewer to click
+    # "Approve and deploy" in the GitHub Actions UI before this runs.
+    # Configure it in repo Settings → Environments → pypi.
+    environment:
+      name: pypi
+      url: https://pypi.org/p/coralbridge
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: dist
+          path: dist/
+
+      # The artifact directory contains SHA256SUMS too; PyPI publish only
+      # wants the sdist + wheel.
+      - name: Filter artifacts to dist/ only
+        run: |
+          rm -f dist/SHA256SUMS
+          ls -la dist/
+
+      - name: Publish to PyPI (trusted publishing)
+        uses: pypa/gh-action-pypi-publish@release/v1
+        # Trusted publishing config: PyPI project must have a publisher
+        # configured pointing at this repo + workflow. Until then this
+        # step will fail loudly — which is the right behavior for a v0.5.0
+        # tag (we don't actually want to publish yet per ADR-013).
+        with:
+          packages-dir: dist/
+          skip-existing: false
+          verbose: true

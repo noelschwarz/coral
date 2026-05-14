@@ -66,6 +66,7 @@ coral revoke https://x.com     # revoke active session(s) for an origin
 coral audit --since 0 --limit 50
 coral audit --event-type session.captured
 coral panic --yes              # revoke everything + stop daemon (trust recovery)
+coral diagnose                 # install + security self-check
 ```
 
 ## Policy & review
@@ -124,7 +125,10 @@ Each `coral_open_session` launches its own Chromium for isolation ([ADR-010](doc
 - [`docs/policy-language.md`](docs/policy-language.md) — YAML schema and decision semantics.
 - [`THREAT_MODEL.md`](THREAT_MODEL.md) — what Coral defends against (and what it doesn't).
 - [`docs/performance.md`](docs/performance.md) — baseline numbers.
-- ADR series — `docs/ADR-006` through `docs/ADR-013` for individual decisions.
+- [`SECURITY.md`](SECURITY.md) — vulnerability reporting policy.
+- [`docs/security-review-prep.md`](docs/security-review-prep.md) — briefing checklist for an external reviewer.
+- [`CHANGELOG.md`](CHANGELOG.md) — release history.
+- ADR series — `docs/ADR-006` through `docs/ADR-014` for individual decisions.
 
 ## Contributing
 

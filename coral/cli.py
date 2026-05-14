@@ -710,3 +710,148 @@ def deny_cmd(
 ) -> None:
     """Deny a pending review."""
     _decide(review_id, "denied", home)
+
+
+# ---- diagnose ---------------------------------------------------------------
+
+
+@app.command("diagnose")
+def diagnose_cmd(
+    home: Path | None = typer.Option(None, "--home", help="Coral data directory."),
+) -> None:
+    """Print a human-readable install + security self-check.
+
+    Useful when reporting issues, prepping for a security review, or
+    debugging a fresh install. Never prints tokens, challenges, the
+    passphrase, or any secret material.
+    """
+    import platform as _platform
+    import sys as _sys
+
+    from coral import __version__
+
+    coral_dir = _home(home)
+    ok = "[32m✓[0m"
+    warn = "[33m⚠[0m"
+    fail = "[31m✗[0m"
+
+    typer.echo(f"coralbridge {__version__}")
+    typer.echo(f"Python {_sys.version.split()[0]} on {_platform.platform()}")
+    typer.echo("")
+
+    # --- runtime deps ------------------------------------------------------
+    typer.echo("Runtime dependencies:")
+    _report_module_version("sqlcipher3", "sqlcipher3", ok, warn)
+    _report_module_version("argon2-cffi", "argon2", ok, warn)
+    _report_module_version("playwright", "playwright", ok, warn)
+    _report_module_version("mcp", "mcp", ok, warn)
+    typer.echo("")
+
+    # --- file layout + permissions ----------------------------------------
+    typer.echo("Coral home: " + str(coral_dir))
+    _report_file(coral_dir / "vault.db", 0o600, ok, warn, fail)
+    _report_file(coral_dir / "vault_meta.json", 0o644, ok, warn, fail)
+    _report_file(coral_dir / "cli.token", 0o600, ok, warn, fail)
+    _report_file(coral_dir / "coral.pid", 0o644, ok, warn, fail)
+    typer.echo("")
+
+    # --- env-var hygiene --------------------------------------------------
+    typer.echo("Environment hygiene:")
+    if os.environ.get("CORAL_PASSPHRASE"):
+        typer.echo(f"  {warn}  CORAL_PASSPHRASE is set in the environment. Convenient for")
+        typer.echo("       CI; leaks into shell history on dev machines.")
+    else:
+        typer.echo(f"  {ok}  CORAL_PASSPHRASE not set in environment.")
+    if os.environ.get("CORAL_HTTP_HOST", "127.0.0.1") != "127.0.0.1":
+        typer.echo(f"  {fail}  CORAL_HTTP_HOST != 127.0.0.1 (spec §6.2 T2).")
+    else:
+        typer.echo(f"  {ok}  HTTP bind address is 127.0.0.1.")
+    typer.echo("")
+
+    # --- daemon liveness --------------------------------------------------
+    cfg = load_config()
+    pid_path = cfg.daemon_pid_file
+    daemon_pid: int | None = None
+    if pid_path.is_file():
+        try:
+            daemon_pid = int(pid_path.read_text(encoding="utf-8").strip())
+        except ValueError:
+            typer.echo(f"  {warn}  PID file present but not a number.")
+    if daemon_pid is None or not pid_running(daemon_pid):
+        typer.echo("Daemon: not running")
+        typer.echo("")
+        typer.echo("(Run `coral start` to see further diagnostics.)")
+        return
+    typer.echo(f"Daemon: running (PID {daemon_pid})")
+
+    cli_token = _read_cli_token(coral_dir)
+    if cli_token is None:
+        typer.echo(f"  {fail}  Bridge token missing — daemon won't accept CLI calls.")
+        return
+    base = f"http://{cfg.http_host}:{cfg.http_port}"
+    health_status, _ = _http_get(f"{base}/healthz", token="x", timeout=2.0)
+    if health_status == 200:
+        typer.echo(f"  {ok}  /healthz responding on {base}.")
+    else:
+        typer.echo(f"  {warn}  /healthz returned {health_status}.")
+
+    s_status, s_payload = _http_get(f"{base}/sessions", token=cli_token, timeout=3.0)
+    s_items = _as_list_of_dicts(s_payload.get("sessions")) if s_status == 200 else None
+    t_status, t_payload = _http_get(f"{base}/tokens", token=cli_token, timeout=3.0)
+    t_items = _as_list_of_dicts(t_payload.get("tokens")) if t_status == 200 else None
+    if s_items is not None and t_items is not None:
+        active_sessions = sum(1 for s in s_items if s.get("status") == "active")
+        typer.echo(
+            f"  {ok}  {active_sessions} active / {len(s_items)} total sessions, "
+            f"{len(t_items)} bearer token(s)."
+        )
+
+    typer.echo("")
+    typer.echo("(See docs/security-review-prep.md for the full reviewer checklist.)")
+
+
+def _report_module_version(dist_name: str, import_name: str, ok: str, warn: str) -> None:
+    try:
+        import importlib
+
+        importlib.import_module(import_name)
+        try:
+            from importlib import metadata as _metadata
+
+            ver = _metadata.version(dist_name)
+        except Exception:
+            ver = "(version unknown)"
+        typer.echo(f"  {ok}  {dist_name} {ver}")
+    except ImportError:
+        typer.echo(f"  {warn}  {dist_name} not importable (some features unavailable)")
+
+
+def _report_file(
+    path: Path,
+    expected_mode: int,
+    ok: str,
+    warn: str,
+    fail: str,
+) -> None:
+    if not path.is_file():
+        typer.echo(f"  {warn}  {path.name}: missing")
+        return
+    actual_mode = path.stat().st_mode & 0o777
+    if actual_mode == expected_mode:
+        typer.echo(f"  {ok}  {path.name}: present (mode {actual_mode:o})")
+        return
+    if actual_mode <= expected_mode:
+        # Stricter than expected — fine.
+        typer.echo(
+            f"  {ok}  {path.name}: present (mode {actual_mode:o}, stricter than {expected_mode:o})"
+        )
+        return
+    if path.name in ("vault.db", "cli.token"):
+        # These leaking to world-readable is genuinely bad.
+        typer.echo(
+            f"  {fail}  {path.name}: mode {actual_mode:o} "
+            f"(expected ≤{expected_mode:o}); "
+            f"fix with `chmod {expected_mode:o} {path}`"
+        )
+    else:
+        typer.echo(f"  {warn}  {path.name}: mode {actual_mode:o} (expected {expected_mode:o})")

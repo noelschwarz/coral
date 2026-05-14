@@ -23,7 +23,10 @@
       </section>
 
       <section id="pair-section" hidden>
-        <p>Paste the handshake challenge from <code>coral start</code>:</p>
+        <p>
+          Run <code>coral up</code> in a terminal — the challenge gets copied
+          to your clipboard automatically.
+        </p>
         <input
           type="text"
           id="challenge-input"
@@ -32,6 +35,7 @@
           spellcheck="false"
           aria-label="Handshake challenge"
         />
+        <p class="hint" id="clipboard-hint" hidden></p>
         <button id="pair-btn">Pair</button>
       </section>
 

@@ -11,6 +11,6 @@
     "service_worker": "background.js",
     "type": "module"
   },
-  "permissions": ["storage", "tabs", "scripting", "cookies", "alarms"],
+  "permissions": ["storage", "tabs", "scripting", "cookies", "alarms", "clipboardRead"],
   "host_permissions": ["http://127.0.0.1/*", "<all_urls>"]
 }

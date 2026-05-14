@@ -88,6 +88,21 @@ def test_status_handles_corrupt_pid_file(tmp_path, monkeypatch) -> None:
     assert "Daemon" in result.stdout
 
 
+def test_install_service_help_lists_passphrase_env_flag(monkeypatch) -> None:
+    monkeypatch.delenv("CORAL_HOME", raising=False)
+    result = runner.invoke(app, ["install-service", "--help"])
+    assert result.exit_code == 0
+    assert "passphrase-env" in result.stdout
+
+
+def test_up_help_documents_foreground_and_no_clipboard(monkeypatch) -> None:
+    monkeypatch.delenv("CORAL_HOME", raising=False)
+    result = runner.invoke(app, ["up", "--help"])
+    assert result.exit_code == 0
+    assert "--foreground" in result.stdout
+    assert "--no-clipboard" in result.stdout
+
+
 # Make sure none of these tests leak CORAL_HOME into the rest of the suite.
 def teardown_module() -> None:
     os.environ.pop("CORAL_HOME", None)

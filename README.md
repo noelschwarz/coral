@@ -1,5 +1,16 @@
 # Coral — `sudo` for browser agents
 
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
+[![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
+[![Status: alpha](https://img.shields.io/badge/status-alpha-orange.svg)](#status)
+[![CI](https://github.com/noelschwarz/coral/actions/workflows/ci.yml/badge.svg)](https://github.com/noelschwarz/coral/actions)
+
+> **Status: alpha — pre-audit.** Coral has not yet undergone an external
+> security review. The design ([THREAT_MODEL.md](THREAT_MODEL.md)) and ADR
+> series document our threat posture transparently, but until a v1.0 release
+> ships with a third-party review, treat Coral as an experimental tool. Don't
+> use it to broker sessions for accounts whose compromise you can't tolerate.
+
 Coral is a **local-first session bridge** that lets AI agents borrow your already-authenticated browser sessions on a per-site, per-action, fully audited basis. You log in once in your real Chrome — passing 2FA, captchas, whatever — and Coral persists the resulting authenticated state in a passphrase-encrypted vault. When an agent needs to act on that site, the Coral daemon spins up a fresh isolated Chromium with your session restored and hands the agent a CDP URL it can drive. **The agent never sees your password.**
 
 Three pieces:
@@ -132,12 +143,22 @@ Each `coral_open_session` launches its own Chromium for isolation ([ADR-010](doc
 - [`SECURITY.md`](SECURITY.md) — vulnerability reporting policy.
 - [`docs/security-review-prep.md`](docs/security-review-prep.md) — briefing checklist for an external reviewer.
 - [`CHANGELOG.md`](CHANGELOG.md) — release history.
-- ADR series — `docs/ADR-006` through `docs/ADR-016` for individual decisions.
+- ADR series — `docs/ADR-006` through `docs/ADR-017` for individual decisions.
 
 ## Contributing
 
-See [`CONTRIBUTING.md`](CONTRIBUTING.md).
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the development workflow,
+quality gates, and DCO sign-off policy. The project follows the
+[Contributor Covenant 2.1](CODE_OF_CONDUCT.md).
+
+## Community
+
+- **Questions, design discussions, show-and-tell:** GitHub Discussions on this repo.
+- **Bugs and feature requests:** GitHub Issues.
+- **Security reports:** see [`SECURITY.md`](SECURITY.md) — please use private
+  vulnerability reporting, not a public issue.
 
 ## License
 
-MIT.
+Licensed under the [Apache License, Version 2.0](LICENSE). Contributions are
+accepted under the same license.

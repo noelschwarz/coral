@@ -19,13 +19,14 @@ Python 3.11+ is required. On Linux you need `libsqlcipher-dev` system-installed
 ## Run the suite
 
 ```bash
-uv run pytest                                   # all 168+ tests
+uv run pytest                                   # all 200+ tests
 uv run pytest tests/unit                        # unit only (~5s)
 uv run pytest tests/integration tests/e2e       # subprocess + real Chromium
 uv run pytest --cov=coral --cov-report=term     # with coverage
 ```
 
-The full suite runs in ~40 s locally on a recent laptop.
+The full suite runs in ~40 s locally on a recent laptop. CI also enforces
+the same gates on Linux + macOS; both must be green before merge.
 
 ## Quality gates (also enforced by CI)
 
@@ -56,7 +57,7 @@ All three must be clean before a PR merges.
 ## ADRs
 
 Architecture Decision Records live in [`docs/`](docs/) (`ADR-006` through
-`ADR-013` at time of writing). Anything that changes a non-trivial tradeoff or
+`ADR-017` at time of writing). Anything that changes a non-trivial tradeoff or
 contradicts the spec needs an ADR. Format: short, honest about alternatives
 considered, includes a "When to revisit" section.
 
@@ -64,11 +65,39 @@ considered, includes a "When to revisit" section.
 
 1. Branch off `main`.
 2. Implement, write tests, run the quality gates locally.
-3. Open a PR with a description that covers: what changed, why, what
+3. **Sign your commits off** — see "Developer Certificate of Origin" below.
+4. Open a PR with a description that covers: what changed, why, what
    alternatives you considered, and a self-attack section if the change touches
    security-critical paths.
-4. CI runs Linux + macOS jobs. Both must be green.
-5. Maintainer reviews; once approved, squash-merge.
+5. CI runs Linux + macOS jobs. Both must be green.
+6. Maintainer reviews; once approved, squash-merge.
+
+## Developer Certificate of Origin (DCO)
+
+Coral uses the [DCO](https://developercertificate.org/) to confirm that each
+contribution is your own work (or you have the right to submit it under the
+project's license). Add a `Signed-off-by:` trailer to every commit:
+
+```bash
+git commit -s -m "your message"
+```
+
+This appends a line like `Signed-off-by: Your Name <you@example.com>` to the
+commit message. By doing so, you certify the four points of the DCO. The full
+text is at <https://developercertificate.org/>.
+
+If a PR is missing sign-offs, you can fix the history before review with:
+
+```bash
+git rebase --signoff main
+git push --force-with-lease
+```
+
+## Code of Conduct
+
+Coral adopts the [Contributor Covenant 2.1](CODE_OF_CONDUCT.md). By
+participating you agree to abide by it. Reports go through GitHub's private
+vulnerability reporting — see `CODE_OF_CONDUCT.md` for details.
 
 ## What's in scope vs. out of scope
 
@@ -98,4 +127,6 @@ not yet had an external security review.
 
 ## License
 
-MIT. By contributing you agree your contribution is licensed under the same.
+Coral is licensed under the [Apache License, Version 2.0](LICENSE). By
+submitting a contribution, you agree it is licensed under the same terms.
+The DCO sign-off (above) is your attestation of that agreement.

@@ -14,14 +14,15 @@ security fixes.** After v1.0, we'll maintain the most recent minor line.
 
 **Please don't open a public issue for security-sensitive reports.** Use
 GitHub's [Report a vulnerability][gh-report] flow from the Security tab of
-this repository. We'll acknowledge within **3 business days** and aim for a
-fix or mitigation timeline within **10 business days** of acknowledgment.
+this repository. The advisory channel is private and goes directly to the
+maintainers. We'll acknowledge within **3 business days** and aim for a fix
+or mitigation timeline within **10 business days** of acknowledgment.
 
 [gh-report]: https://github.com/noelschwarz/coral/security/advisories/new
 
-If you can't use GitHub Security Advisories for any reason, email
-`security@coralbridge.dev` (TODO before v1.0 publish — until then, the
-GitHub flow is the only channel).
+GitHub private vulnerability reporting is the only supported channel
+pre-1.0. We may add a dedicated security email at v1.0 once we have a
+stable contact alias in place.
 
 When reporting, please include:
 

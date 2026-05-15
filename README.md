@@ -2,57 +2,44 @@
 
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache_2.0-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11+-blue.svg)](https://www.python.org/downloads/)
-[![Status: alpha](https://img.shields.io/badge/status-alpha-orange.svg)](#status)
+[![Status: alpha](https://img.shields.io/badge/status-alpha-orange.svg)](THREAT_MODEL.md)
 [![CI](https://github.com/noelschwarz/coral/actions/workflows/ci.yml/badge.svg)](https://github.com/noelschwarz/coral/actions)
 
-> **Status: alpha — pre-audit.** Coral has not yet undergone an external
-> security review. The design ([THREAT_MODEL.md](THREAT_MODEL.md)) and ADR
-> series document our threat posture transparently, but until a v1.0 release
-> ships with a third-party review, treat Coral as an experimental tool. Don't
-> use it to broker sessions for accounts whose compromise you can't tolerate.
+> **Alpha — pre-audit.** Coral has not yet undergone an external security
+> review. The design ([THREAT_MODEL.md](THREAT_MODEL.md)) is transparent about
+> what's defended and what isn't, but until a v1.0 release ships with a
+> third-party review, treat Coral as experimental. Don't use it to broker
+> sessions for accounts you can't afford to have compromised.
 
-Coral is a **local-first session bridge** that lets AI agents borrow your already-authenticated browser sessions on a per-site, per-action, fully audited basis. You log in once in your real Chrome — passing 2FA, captchas, whatever — and Coral persists the resulting authenticated state in a passphrase-encrypted vault. When an agent needs to act on that site, the Coral daemon spins up a fresh isolated Chromium with your session restored and hands the agent a CDP URL it can drive. **The agent never sees your password.**
+Coral is a **local-first session bridge** that lets AI agents borrow your
+already-authenticated browser sessions on a per-site, per-action, fully
+audited basis. You log in once in your real Chrome — passing 2FA, captchas,
+whatever — and Coral persists the resulting authenticated state in a
+passphrase-encrypted vault. When an agent needs to act on that site, Coral
+spins up a fresh isolated Chromium with your session restored and hands the
+agent a CDP URL it can drive. **The agent never sees your password.**
 
-Three pieces:
-- **Python daemon + CLI** (this repo) — vault, HTTP API, MCP server, Playwright session manager, policy engine.
-- **Chrome extension** (`/extension/`, separate codebase) — captures sessions from your normal browsing.
-- **MCP integration** — any MCP-speaking agent (Claude Desktop, Cursor, Claude Code, browser-use, Stagehand) drives Coral via stdio or HTTP.
+## How it fits together
 
-Status: **v0.6.0 — daemon + CLI + Chrome extension + OS keychain integration; PyPI publish pending.**
-The mechanical thesis is provable end-to-end ([e2e test](tests/e2e/test_capture_and_restore.py)),
-and the extension implements the spec §13.1 onboarding flow
-([install guide](extension/INSTALL.md)).
+- **Python daemon + CLI** (this repo) — vault, HTTP API, MCP server,
+  Playwright session manager, policy engine.
+- **Chrome extension** (`extension/`) — captures sessions from your normal
+  browsing. Submitted to the Chrome Web Store; while the listing is under
+  review, load it unpacked as shown below.
+- **MCP** — any MCP-speaking agent (Claude Desktop, Cursor, Claude Code,
+  browser-use, Stagehand, …) drives Coral over stdio or local HTTP.
 
-## Demo
+## Requirements
 
-<!--
-TODO: replace this placeholder with a real recording once Phase 3 follow-up lands.
-Two formats both render well in GitHub READMEs:
+- **Python 3.11+**
+- **macOS** or **Linux** (Windows is not supported yet)
+- SQLCipher native library:
+  - macOS — `brew install sqlcipher`
+  - Linux (Debian/Ubuntu) — `sudo apt install libsqlcipher-dev`
+- [**uv**](https://docs.astral.sh/uv/) — `curl -LsSf https://astral.sh/uv/install.sh | sh`
+- **Node 20+** — only to build the Chrome extension
 
-  1. asciinema cast (terminal only): record with `asciinema rec demo.cast`,
-     upload to asciinema.org, then embed:
-
-         [![asciicast](https://asciinema.org/a/<id>.svg)](https://asciinema.org/a/<id>)
-
-  2. animated GIF (terminal + browser): record with QuickTime / OBS, convert
-     with `ffmpeg -i demo.mov -vf "fps=12,scale=900:-1:flags=lanczos" -loop 0 docs/img/demo.gif`,
-     commit under `docs/img/`, and embed:
-
-         ![Coral demo](docs/img/demo.gif)
-
-Suggested 30-second flow:
-  - terminal:  `coral up`  → handshake challenge appears + "copied to clipboard"
-  - browser:   click the Coral extension icon → popup auto-detects → click "Pair"
-  - browser:   navigate to a logged-in site → click "Capture session"
-  - terminal:  `coral list`  →  the captured session shows up
--->
-
-_Screencast coming soon. The terminal+browser flow takes about thirty
-seconds end-to-end — see the [Quickstart](#quickstart--3-steps) below._
-
-## Install (current)
-
-`pip install coralbridge` isn't published yet (waiting on the extension's Chrome Web Store submission; see ADR-013). For now:
+## Install
 
 ```sh
 git clone https://github.com/noelschwarz/coral
@@ -61,22 +48,28 @@ uv sync --all-extras
 uv run playwright install chromium
 ```
 
-Coral requires Python 3.11+. On Linux you need `libsqlcipher-dev` (`apt install libsqlcipher-dev`). macOS pulls in SQLCipher via `brew install sqlcipher`. Windows is not in the supported matrix yet (per ADR-013).
-
-## Quickstart — 3 steps
-
-Open a terminal in the repo root:
+If you'd rather have `coral` on your `PATH` instead of typing `uv run coral`
+every time:
 
 ```sh
-uv run coral up
+uv tool install .
 ```
 
-That single command:
-- Initializes the vault (prompts for a passphrase the first time).
-- Starts the daemon detached in the background.
-- **Copies the handshake challenge to your clipboard.**
+## Quickstart
 
-Then build and load the extension:
+Three terminal commands and three Chrome clicks. End-to-end under a minute.
+
+### 1. Start the daemon
+
+```sh
+coral up
+```
+
+`coral up` initializes the encrypted vault on first run (asks for a
+passphrase), starts the daemon in the background, and **copies a pairing
+challenge to your clipboard**.
+
+### 2. Build and load the extension
 
 ```sh
 cd extension
@@ -85,45 +78,51 @@ npm run build
 ```
 
 In Chrome:
-1. `chrome://extensions` → enable **Developer mode** → **Load unpacked** → pick `extension/dist/`.
-2. Click the Coral icon. The popup detects the clipboard challenge and pre-fills the input.
-3. Press **Pair**.
 
-Done. Navigate to a site you're logged into → click the Coral icon → **Capture session**.
+1. Open `chrome://extensions`.
+2. Toggle **Developer mode** (top-right).
+3. Click **Load unpacked** and select the `extension/dist/` directory.
+4. Pin the Coral icon to your toolbar.
+5. Click the icon — the popup auto-detects the clipboard challenge — and
+   press **Pair**.
 
-### For daily use (optional but recommended)
+### 3. Capture a session
+
+1. Navigate to any site you're already logged into.
+2. Click the Coral icon → **Capture session**.
+
+Verify from the terminal:
 
 ```sh
-uv run coral install-service
+coral status      # daemon state, active sessions, connected agents
+coral list        # captured sessions
 ```
 
-Writes a launchd LaunchAgent (macOS) or systemd `--user` unit (Linux) so the daemon auto-starts on login. No more "keep this terminal open."
+That's it — an MCP agent can now open this session via `coral_open_session`.
 
-## Daily-use commands
+### Make it permanent
 
-```bash
-coral status                   # daemon state, active sessions, connected agents
-coral list                     # captured sessions
-coral revoke https://x.com     # revoke active session(s) for an origin
-coral audit --since 0 --limit 50
-coral audit --event-type session.captured
-coral panic --yes              # revoke everything + stop daemon (trust recovery)
-coral diagnose                 # install + security self-check
+So you don't have to keep a terminal open or re-run `coral up` after every
+reboot:
+
+```sh
+coral install-service
 ```
 
-## Policy & review
+That writes a launchd LaunchAgent (macOS) or systemd `--user` unit (Linux)
+and stores the vault passphrase in your OS keychain
+([ADR-017](docs/ADR-017-keychain-integration.md)). The daemon now starts
+automatically on login.
 
-```bash
-coral policy get https://github.com               # print the active YAML
-coral policy put https://github.com -f my.yaml    # upload
-coral reviews list                                # pending operator reviews
-coral approve <review_id>
-coral deny    <review_id>
+To undo:
+
+```sh
+coral uninstall-service
 ```
 
-Six bundled behavior packs (GitHub, Gmail, Linear, LinkedIn, Notion, Slack) seed on `coral init` with `default_action: deny` plus explicit `allowed_paths`. The schema lives in [`docs/policy-language.md`](docs/policy-language.md); the rationale is in [ADR-011](docs/ADR-011-policy-engine.md).
+## Use it from an MCP agent
 
-## End-to-end via MCP
+Any MCP client can ask Coral for an authenticated Chromium over CDP:
 
 ```python
 from mcp import ClientSession
@@ -131,11 +130,13 @@ from mcp.client.stdio import StdioServerParameters, stdio_client
 from playwright.async_api import async_playwright
 
 server = StdioServerParameters(command="coral", args=["mcp-stdio"])
+
 async with stdio_client(server) as (read, write), ClientSession(read, write) as s:
     await s.initialize()
+
     res = await s.call_tool(
         "coral_open_session",
-        {"session_id": "<uuid from coral list>", "purpose": "read my feed"},
+        {"session_id": "<uuid from `coral list`>", "purpose": "read my feed"},
     )
     cdp_url = res.structuredContent["cdp_url"]
     handle  = res.structuredContent["session_handle"]
@@ -151,41 +152,74 @@ async with stdio_client(server) as (read, write), ClientSession(read, write) as 
     await s.call_tool("coral_close_session", {"session_handle": handle})
 ```
 
-Each `coral_open_session` launches its own Chromium for isolation ([ADR-010](docs/ADR-010-per-session-chromium.md)). Every navigation routes through the policy engine; denied paths abort with `ERR_BLOCKED_BY_CLIENT` before the network call.
+Each `coral_open_session` launches its own Chromium for isolation
+([ADR-010](docs/ADR-010-per-session-chromium.md)). Every navigation routes
+through the policy engine; denied paths abort before the network call.
+
+## Daily commands
+
+```sh
+coral status                          # daemon state, sessions, agents
+coral list                            # captured sessions
+coral revoke https://example.com      # revoke session(s) for an origin
+coral audit --since 0 --limit 50      # tail the audit log
+coral panic --yes                     # revoke everything + stop daemon
+coral diagnose                        # install + security self-check
+coral keychain status                 # is the vault passphrase stashed?
+```
+
+## Policy & review
+
+Each origin has a YAML policy declaring `allowed_paths`, `denied_paths`,
+rate limits, and review thresholds. Six bundled behavior packs (GitHub,
+Gmail, Linear, LinkedIn, Notion, Slack) seed at first run with
+`default_action: deny` plus explicit allow-lists.
+
+```sh
+coral policy get https://github.com               # print the active YAML
+coral policy put https://github.com -f my.yaml    # upload a new one
+coral reviews list                                # pending operator reviews
+coral approve <review_id>
+coral deny    <review_id>
+```
+
+Schema in [`docs/policy-language.md`](docs/policy-language.md); rationale
+in [ADR-011](docs/ADR-011-policy-engine.md).
 
 ## Environment variables
 
 - `CORAL_HOME` — data directory (default `~/.coral`).
-- `CORAL_PASSPHRASE` — non-interactive passphrase for `init` / `start` (CI and scripts).
-- `CORAL_HTTP_HOST`, `CORAL_HTTP_PORT`, `CORAL_MCP_HTTP_PORT` — port overrides (host stays `127.0.0.1` by hard binding; see [ADR-008](docs/ADR-008-http-api-and-mcp.md)).
-- `CORAL_DIAG_LEVEL` — structured stderr log filter (`debug|info|warn|error`, default `info`).
+- `CORAL_PASSPHRASE` — non-interactive passphrase for `init` / `start`
+  (CI and scripts only — prefer the OS keychain for daily use).
+- `CORAL_HTTP_PORT`, `CORAL_MCP_HTTP_PORT` — port overrides. The host is
+  always `127.0.0.1` ([ADR-008](docs/ADR-008-http-api-and-mcp.md)).
+- `CORAL_DIAG_LEVEL` — structured stderr log filter
+  (`debug|info|warn|error`, default `info`).
 
-## Architecture & docs
+## Docs
 
-- [`coral-engineering-spec.md`](coral-engineering-spec.md) — the source of truth.
+- [`coral-engineering-spec.md`](coral-engineering-spec.md) — source of truth.
 - [`docs/architecture.md`](docs/architecture.md) — current module map.
-- [`docs/policy-language.md`](docs/policy-language.md) — YAML schema and decision semantics.
 - [`THREAT_MODEL.md`](THREAT_MODEL.md) — what Coral defends against (and what it doesn't).
-- [`docs/performance.md`](docs/performance.md) — baseline numbers.
+- [`docs/policy-language.md`](docs/policy-language.md) — YAML policy schema.
 - [`SECURITY.md`](SECURITY.md) — vulnerability reporting policy.
-- [`docs/security-review-prep.md`](docs/security-review-prep.md) — briefing checklist for an external reviewer.
 - [`CHANGELOG.md`](CHANGELOG.md) — release history.
-- ADR series — `docs/ADR-006` through `docs/ADR-017` for individual decisions.
+- `docs/ADR-006` … `docs/ADR-017` — individual architectural decisions.
 
 ## Contributing
 
-See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the development workflow,
-quality gates, and DCO sign-off policy. The project follows the
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the dev workflow, quality
+gates, and DCO sign-off requirements. The project follows the
 [Contributor Covenant 2.1](CODE_OF_CONDUCT.md).
 
 ## Community
 
-- **Questions, design discussions, show-and-tell:** GitHub Discussions on this repo.
-- **Bugs and feature requests:** GitHub Issues.
-- **Security reports:** see [`SECURITY.md`](SECURITY.md) — please use private
-  vulnerability reporting, not a public issue.
+- **Questions, design discussions, show-and-tell:** [GitHub Discussions](https://github.com/noelschwarz/coral/discussions).
+- **Bugs and feature requests:** [GitHub Issues](https://github.com/noelschwarz/coral/issues).
+- **Security reports:** use [private vulnerability reporting](https://github.com/noelschwarz/coral/security/advisories/new),
+  not a public issue. Details in [`SECURITY.md`](SECURITY.md).
 
 ## License
 
-Licensed under the [Apache License, Version 2.0](LICENSE). Contributions are
-accepted under the same license.
+Licensed under the [Apache License, Version 2.0](LICENSE). Contributions
+are accepted under the same terms.

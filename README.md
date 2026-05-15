@@ -18,10 +18,37 @@ Three pieces:
 - **Chrome extension** (`/extension/`, separate codebase) — captures sessions from your normal browsing.
 - **MCP integration** — any MCP-speaking agent (Claude Desktop, Cursor, Claude Code, browser-use, Stagehand) drives Coral via stdio or HTTP.
 
-Status: **v0.5.0 — daemon + CLI + Chrome extension shipped; PyPI publish pending.**
+Status: **v0.6.0 — daemon + CLI + Chrome extension + OS keychain integration; PyPI publish pending.**
 The mechanical thesis is provable end-to-end ([e2e test](tests/e2e/test_capture_and_restore.py)),
 and the extension implements the spec §13.1 onboarding flow
 ([install guide](extension/INSTALL.md)).
+
+## Demo
+
+<!--
+TODO: replace this placeholder with a real recording once Phase 3 follow-up lands.
+Two formats both render well in GitHub READMEs:
+
+  1. asciinema cast (terminal only): record with `asciinema rec demo.cast`,
+     upload to asciinema.org, then embed:
+
+         [![asciicast](https://asciinema.org/a/<id>.svg)](https://asciinema.org/a/<id>)
+
+  2. animated GIF (terminal + browser): record with QuickTime / OBS, convert
+     with `ffmpeg -i demo.mov -vf "fps=12,scale=900:-1:flags=lanczos" -loop 0 docs/img/demo.gif`,
+     commit under `docs/img/`, and embed:
+
+         ![Coral demo](docs/img/demo.gif)
+
+Suggested 30-second flow:
+  - terminal:  `coral up`  → handshake challenge appears + "copied to clipboard"
+  - browser:   click the Coral extension icon → popup auto-detects → click "Pair"
+  - browser:   navigate to a logged-in site → click "Capture session"
+  - terminal:  `coral list`  →  the captured session shows up
+-->
+
+_Screencast coming soon. The terminal+browser flow takes about thirty
+seconds end-to-end — see the [Quickstart](#quickstart--3-steps) below._
 
 ## Install (current)
 

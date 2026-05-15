@@ -1,0 +1,10 @@
+# CODEOWNERS
+#
+# GitHub uses this file to auto-request reviews on PRs. The last matching
+# pattern wins. See https://docs.github.com/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
+#
+# As the project grows, split ownership by area (e.g. extension/, coral/vault.py,
+# .github/workflows/) so reviewers only get pinged for what they actually own.
+# For now, everything routes to the original maintainer.
+
+*       @noelschwarz

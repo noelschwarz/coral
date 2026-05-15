@@ -1,0 +1,91 @@
+name: Bug report
+description: Something is broken or behaves unexpectedly.
+title: "bug: <short description>"
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug. **Security-sensitive reports must NOT go
+        here** — use [GitHub private vulnerability reporting](https://github.com/noelschwarz/coral/security/advisories/new)
+        instead so the issue stays confidential while we fix it.
+
+        For everything else, please fill out the fields below. The more
+        concrete the repro, the faster we can help.
+
+  - type: input
+    id: coral-version
+    attributes:
+      label: Coral version
+      description: Output of `coral --version` (or `uv run coral --version`).
+      placeholder: "0.5.0"
+    validations:
+      required: true
+
+  - type: input
+    id: python-version
+    attributes:
+      label: Python version
+      description: Output of `python --version`.
+      placeholder: "3.12.3"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Linux (Debian/Ubuntu family)
+        - Linux (Fedora/RHEL family)
+        - Linux (Arch / NixOS / other)
+        - Other / multiple
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Describe the actual behavior. Include exact error messages.
+      placeholder: |
+        I ran `coral install-service` and got "..."
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: What did you expect to happen?
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: Minimal reproduction
+      description: Commands and inputs that reproduce the issue, ideally from a fresh `CORAL_HOME`.
+      render: bash
+      placeholder: |
+        export CORAL_HOME=$(mktemp -d)
+        coral up
+        # ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs
+      description: |
+        Output from `~/.coral/coral.log` and/or the terminal. **Redact any
+        passphrases, tokens, cookies, or session data** before pasting.
+      render: text
+
+  - type: textarea
+    id: context
+    attributes:
+      label: Anything else?
+      description: Workarounds you've tried, related issues, screenshots, etc.

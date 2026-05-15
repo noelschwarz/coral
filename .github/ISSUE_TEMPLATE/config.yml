@@ -1,0 +1,19 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/noelschwarz/coral/security/advisories/new
+    about: |
+      Report a vulnerability privately. Please do NOT open a public issue
+      for security-sensitive reports. See SECURITY.md for our policy.
+  - name: Question / discussion
+    url: https://github.com/noelschwarz/coral/discussions
+    about: |
+      For "how do I...", design discussions, or show-and-tell, prefer
+      Discussions over Issues. Issues are for actionable bugs and concrete
+      feature requests.
+  - name: Code of Conduct violation
+    url: https://github.com/noelschwarz/coral/security/advisories/new
+    about: |
+      Report Code of Conduct violations via the same private channel as
+      security issues. Mark the report subject "Code of Conduct". See
+      CODE_OF_CONDUCT.md for details.

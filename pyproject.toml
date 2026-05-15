@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "coralbridge"
-version = "0.5.0"
+version = "0.6.0"
 description = "Local-first session bridge that lets AI agents borrow your authenticated browser sessions per-site, per-action, fully audited."
 readme = "README.md"
 requires-python = ">=3.11"

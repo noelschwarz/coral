@@ -1,0 +1,75 @@
+name: Feature request
+description: Suggest a new capability or behavior.
+title: "feat: <short description>"
+labels: ["feature", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion. Before filing, please check:
+
+        - The [ROADMAP](https://github.com/noelschwarz/coral#roadmap) and
+          existing ADRs in `docs/ADR-*.md` — your idea may already be planned
+          or deliberately deferred.
+        - Existing issues, including closed ones.
+
+        Larger changes that touch architecture or threat model will need an
+        ADR before implementation — we can collaborate on that in the issue.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem does this solve?
+      description: Describe the user-visible pain point in concrete terms. Avoid jumping to a solution here.
+      placeholder: |
+        When I try to ..., I have to ... which breaks because ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: What should Coral do? CLI commands, API shape, extension flow — be specific.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Other approaches and why this one wins. Honest tradeoffs welcome.
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Which surface does this touch?
+      multiple: true
+      options:
+        - Daemon (HTTP API / vault / sessions)
+        - CLI
+        - MCP server
+        - Chrome extension
+        - Policy engine / behavior packs
+        - Docs / threat model
+        - Build / packaging / CI
+        - Other
+    validations:
+      required: true
+
+  - type: textarea
+    id: security
+    attributes:
+      label: Threat-model impact
+      description: |
+        Does this introduce a new trust boundary, broaden an existing one, or
+        affect the existing T1-T11 threat list? If unsure, say so — we'll
+        figure it out together.
+
+  - type: checkboxes
+    id: contribution
+    attributes:
+      label: Contribution
+      options:
+        - label: I'd be willing to contribute a PR for this.
+          required: false

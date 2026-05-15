@@ -8,7 +8,8 @@ version = "0.5.0"
 description = "Local-first session bridge that lets AI agents borrow your authenticated browser sessions per-site, per-action, fully audited."
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 authors = [{ name = "Coral contributors" }]
 keywords = [
   "ai",
@@ -23,7 +24,6 @@ keywords = [
 classifiers = [
   "Development Status :: 4 - Beta",
   "Intended Audience :: Developers",
-  "License :: OSI Approved :: MIT License",
   "Operating System :: MacOS",
   "Operating System :: POSIX :: Linux",
   "Programming Language :: Python :: 3",

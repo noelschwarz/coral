@@ -37,7 +37,8 @@ agent a CDP URL it can drive. **The agent never sees your password.**
   - macOS — `brew install sqlcipher`
   - Linux (Debian/Ubuntu) — `sudo apt install libsqlcipher-dev`
 - [**uv**](https://docs.astral.sh/uv/) — `curl -LsSf https://astral.sh/uv/install.sh | sh`
-- **Node 20+** — only to build the Chrome extension
+- **Node 20+** — only if you build the Chrome extension from source (optional
+  when using the pre-built `coral-extension-v0.6.0.zip`)
 
 ## Install
 
@@ -69,7 +70,22 @@ coral up
 passphrase), starts the daemon in the background, and **copies a pairing
 challenge to your clipboard**.
 
-### 2. Build and load the extension
+### 2. Load the extension
+
+**Pre-built bundle (recommended)** — no Node.js required. Download
+[`coral-extension-v0.6.0.zip`](https://github.com/noelschwarz/coral/releases/download/v0.6.0/coral-extension-v0.6.0.zip)
+into `extension/`, then:
+
+```sh
+cd extension
+mkdir -p dist-v0.6.0
+unzip -o coral-extension-v0.6.0.zip -d dist-v0.6.0
+```
+
+Load `extension/dist-v0.6.0/` in Chrome (step 3 below). The zip is
+gitignored so release bundles stay out of the repo.
+
+**Build from source** — only if you need unreleased extension changes:
 
 ```sh
 cd extension
@@ -77,11 +93,14 @@ npm ci
 npm run build
 ```
 
+Load `extension/dist/` instead.
+
 In Chrome:
 
 1. Open `chrome://extensions`.
 2. Toggle **Developer mode** (top-right).
-3. Click **Load unpacked** and select the `extension/dist/` directory.
+3. Click **Load unpacked** and select `extension/dist-v0.6.0/` (pre-built)
+   or `extension/dist/` (from source).
 4. Pin the Coral icon to your toolbar.
 5. Click the icon — the popup auto-detects the clipboard challenge — and
    press **Pair**.

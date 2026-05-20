@@ -9,6 +9,9 @@ htmlcov/
 .pytest_cache/
 .ruff_cache/
 
+# Pre-built extension bundles (download from GitHub Releases)
+extension/coral-extension-v0.6.0.zip
+
 # Coral local data (dev)
 .coral/
 

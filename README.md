@@ -175,6 +175,19 @@ Each `coral_open_session` launches its own Chromium for isolation
 ([ADR-010](docs/ADR-010-per-session-chromium.md)). Every navigation routes
 through the policy engine; denied paths abort before the network call.
 
+### Working examples
+
+Runnable end-to-end examples live in [`examples/`](examples/):
+
+- [`examples/python_mcp/`](examples/python_mcp/) — pure Python + `mcp`
+  SDK + Playwright. Smallest possible loop.
+- [`examples/browser_use/`](examples/browser_use/) — LLM-orchestrated
+  agent via [`browser-use`](https://github.com/browser-use/browser-use).
+- [`examples/stagehand/`](examples/stagehand/) — TypeScript agent via
+  [Stagehand](https://github.com/browserbase/stagehand).
+
+Copy, modify, and discard.
+
 ## Daily commands
 
 ```sh

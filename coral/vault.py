@@ -402,6 +402,15 @@ class Vault:
         sql = "UPDATE sessions SET status = ? WHERE id = ?"
         await self._enqueue_write(sql, (status, session_id))
 
+    async def update_session_state_blob(self, session_id: str, state_blob: bytes) -> None:
+        """Overwrite the encrypted state blob and bump ``last_used_at``.
+
+        Used by the session-close write-back path (ADR-018) to persist
+        policy-admitted cookie deltas from a just-finished agent session.
+        """
+        sql = "UPDATE sessions SET state_blob = ?, last_used_at = ? WHERE id = ?"
+        await self._enqueue_write(sql, (state_blob, int(time.time()), session_id))
+
     async def revoke_session(self, session_id: str) -> None:
         sql = "UPDATE sessions SET status = 'revoked', state_blob = ? WHERE id = ?"
         await self._enqueue_write(sql, (b"", session_id))

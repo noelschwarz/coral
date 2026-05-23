@@ -1,0 +1,6 @@
+# Per-example virtualenvs / node deps — never commit these.
+*/.venv/
+*/node_modules/
+*/dist/
+*/__pycache__/
+*/*.lock

@@ -525,6 +525,14 @@ def _http_delete(url: str, *, token: str, timeout: float = 5.0) -> int:
     return code
 
 
+def _badge_ok(text: str) -> str:
+    return typer.style(f"✓ {text}", fg=typer.colors.GREEN)
+
+
+def _badge_bad(text: str) -> str:
+    return typer.style(f"✗ {text}", fg=typer.colors.RED)
+
+
 @app.command("status")
 def status(
     home: Path | None = typer.Option(None, "--home", help="Coral data directory."),
@@ -533,7 +541,10 @@ def status(
     coral_dir = _home(home)
     db = vault_db_path(coral_dir)
     typer.echo(f"Coral home: {coral_dir}")
-    typer.echo(f"Vault DB: {'present' if db.is_file() else 'missing'} ({db})")
+    vault_present = db.is_file()
+    vault_label = "present" if vault_present else "missing"
+    badge = _badge_ok(vault_label) if vault_present else _badge_bad(vault_label)
+    typer.echo(f"Vault DB: {vault_label} ({db}) {badge}")
 
     cfg = load_config()
     pid_path = cfg.daemon_pid_file
@@ -547,9 +558,14 @@ def status(
             pid = None
 
     if not daemon_alive:
-        typer.echo("Daemon: not running")
+        typer.echo(f"Daemon: not running  {_badge_bad('down')}")
+        if vault_present:
+            typer.echo("\nStart it with `coral up` (or `coral start` for foreground).")
+        else:
+            typer.echo("\nFirst-time setup: run `coral up`.")
         return
-    typer.echo(f"Daemon: running (PID {pid})")
+    typer.echo(f"Daemon: running (PID {pid})  {_badge_ok('up')}")
+    typer.echo(f"Listening on: http://{cfg.http_host}:{cfg.http_port}")
 
     cli_token = _read_cli_token(coral_dir)
     if cli_token is None:
@@ -737,16 +753,23 @@ def _panic_via_vault(coral_dir: Path) -> None:
 @app.command("list")
 def list_command(
     home: Path | None = typer.Option(None, "--home", help="Coral data directory."),
+    full_ids: bool = typer.Option(
+        False,
+        "--full-ids",
+        help="Show full session UUIDs instead of an 8-character short form.",
+    ),
 ) -> None:
     """List captured sessions via the running daemon."""
+    from coral.cli_format import humanize_age, render_table, short_id
+
     coral_dir = _home(home)
     cfg = load_config()
     if not cfg.daemon_pid_file.is_file():
-        typer.secho("Daemon not running. Start it with `coral start`.", err=True)
+        typer.secho("Daemon not running. Start it with `coral up`.", err=True)
         raise typer.Exit(code=1)
     cli_token = _read_cli_token(coral_dir)
     if cli_token is None:
-        typer.secho("Bridge token missing. Restart `coral start`.", err=True)
+        typer.secho("Bridge token missing. Restart `coral up`.", err=True)
         raise typer.Exit(code=1)
     base = f"http://{cfg.http_host}:{cfg.http_port}"
     code, payload = _http_get(f"{base}/sessions", token=cli_token)
@@ -755,14 +778,30 @@ def list_command(
         typer.secho(f"list failed (status={code})", err=True)
         raise typer.Exit(code=1)
     if not rows:
-        typer.echo("(no sessions captured)")
+        typer.echo("(no sessions captured — capture one via the Chrome extension)")
         return
+
+    now = int(time.time())
+    table_rows: list[list[str]] = []
     for r in rows:
-        sid = r.get("id", "?")
-        origin = r.get("origin", "?")
-        status_field = r.get("status", "?")
-        label = r.get("label") or ""
-        typer.echo(f"{sid}  {status_field:<8} {origin}  {label}")
+        raw_id = str(r.get("id", "?"))
+        sid = raw_id if full_ids else short_id(raw_id)
+        origin = str(r.get("origin", "?"))
+        status_field = str(r.get("status", "?"))
+        created = r.get("created_at")
+        last_used = r.get("last_used_at")
+        created_str = humanize_age(int(created), now=now) if isinstance(created, int) else "?"
+        last_used_str = (
+            humanize_age(int(last_used), now=now) if isinstance(last_used, int) else "never"
+        )
+        label = r.get("label") or "—"
+        table_rows.append([sid, origin, status_field, created_str, last_used_str, str(label)])
+
+    headers = ["ID", "ORIGIN", "STATUS", "CAPTURED", "LAST USED", "LABEL"]
+    typer.echo(render_table(headers, table_rows))
+
+    active = sum(1 for r in rows if r.get("status") == "active")
+    typer.echo(f"\n{active} active / {len(rows)} total")
 
 
 @app.command("revoke")

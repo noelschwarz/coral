@@ -932,6 +932,156 @@ def deny_cmd(
     _decide(review_id, "denied", home)
 
 
+# ---- mcp install / uninstall / status ---------------------------------------
+
+
+mcp_app = typer.Typer(
+    no_args_is_help=True,
+    help="Wire Coral into MCP clients (Claude Desktop, Cursor, Claude Code).",
+)
+app.add_typer(mcp_app, name="mcp")
+
+
+def _mcp_known_clients_str() -> str:
+    from coral.mcp_install import KNOWN_CLIENTS
+
+    return ", ".join(KNOWN_CLIENTS)
+
+
+@mcp_app.command("install")
+def mcp_install_cmd(
+    client: str = typer.Option(
+        ...,
+        "--client",
+        "-c",
+        help="Which MCP client to configure: claude-desktop, cursor, or claude-code.",
+    ),
+    name: str = typer.Option(
+        "coral",
+        "--name",
+        "-n",
+        help="Name for the server entry in the client's config.",
+    ),
+    home: Path | None = typer.Option(
+        None,
+        "--home",
+        help=(
+            "Coral data directory. Only written into the client config if "
+            "explicitly passed or if CORAL_HOME is set; otherwise the client "
+            "uses Coral's default (~/.coral)."
+        ),
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        "-f",
+        help="Overwrite an existing entry with the same name.",
+    ),
+) -> None:
+    """Add Coral as an MCP server in the specified client's config file.
+
+    After running this, restart the client (Claude Desktop, Cursor, Claude
+    Code) to load the new server. The client will spawn ``coral mcp-stdio``
+    on demand.
+    """
+    from coral import mcp_install as mi
+
+    if client not in mi.KNOWN_CLIENTS:
+        typer.secho(
+            f"Unknown client {client!r}. Known: {_mcp_known_clients_str()}.",
+            err=True,
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=2)
+
+    coral_dir: Path | None = None
+    if home is not None:
+        coral_dir = home.expanduser().resolve()
+    elif os.environ.get("CORAL_HOME"):
+        coral_dir = Path(os.environ["CORAL_HOME"]).expanduser().resolve()
+
+    try:
+        result = mi.install(client, name=name, coral_home=coral_dir, force=force)
+    except mi.MCPInstallError as exc:
+        typer.secho(str(exc), err=True, fg=typer.colors.RED)
+        raise typer.Exit(code=1) from exc
+
+    if result.created_config_file:
+        typer.echo(f"Created {result.config_path} (fresh config).")
+    if result.overwrote_existing:
+        typer.secho(
+            f"Overwrote existing {name!r} entry in {result.config_path}.",
+            fg=typer.colors.YELLOW,
+        )
+    typer.secho(
+        f"✓ Added {name!r} to {result.client.label} config.",
+        fg=typer.colors.GREEN,
+    )
+    typer.echo("")
+    typer.echo(f"Restart {result.client.label} to load the new MCP server.")
+
+
+@mcp_app.command("uninstall")
+def mcp_uninstall_cmd(
+    client: str = typer.Option(..., "--client", "-c", help="Which MCP client to update."),
+    name: str = typer.Option("coral", "--name", "-n", help="Name of the server entry to remove."),
+) -> None:
+    """Remove Coral from the specified client's MCP config. Idempotent."""
+    from coral import mcp_install as mi
+
+    if client not in mi.KNOWN_CLIENTS:
+        typer.secho(
+            f"Unknown client {client!r}. Known: {_mcp_known_clients_str()}.",
+            err=True,
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=2)
+
+    try:
+        removed = mi.uninstall(client, name=name)
+    except mi.MCPInstallError as exc:
+        typer.secho(str(exc), err=True, fg=typer.colors.RED)
+        raise typer.Exit(code=1) from exc
+
+    if removed:
+        typer.secho(
+            f"✓ Removed {name!r} from {mi.get_client(client).label} config.",
+            fg=typer.colors.GREEN,
+        )
+    else:
+        typer.echo(f"No {name!r} entry to remove (config absent or entry not present).")
+
+
+@mcp_app.command("status")
+def mcp_status_cmd(
+    client: str = typer.Option(..., "--client", "-c", help="Which MCP client to inspect."),
+    name: str = typer.Option("coral", "--name", "-n", help="Name of the server entry to check."),
+) -> None:
+    """Print the current MCP server entry for Coral in the client config."""
+    import json as _json
+
+    from coral import mcp_install as mi
+
+    if client not in mi.KNOWN_CLIENTS:
+        typer.secho(
+            f"Unknown client {client!r}. Known: {_mcp_known_clients_str()}.",
+            err=True,
+            fg=typer.colors.RED,
+        )
+        raise typer.Exit(code=2)
+
+    c = mi.get_client(client)
+    typer.echo(f"Client:      {c.label}")
+    typer.echo(f"Config file: {c.config_path}")
+
+    entry = mi.get_entry(client, name=name)
+    if entry is None:
+        typer.echo(f"Entry {name!r}: not installed")
+        return
+    typer.echo(f"Entry {name!r}:")
+    typer.echo(_json.dumps(entry, indent=2))
+
+
 # ---- keychain ---------------------------------------------------------------
 
 

@@ -141,7 +141,18 @@ coral uninstall-service
 
 ## Use it from an MCP agent
 
-Any MCP client can ask Coral for an authenticated Chromium over CDP:
+The fastest way to wire Coral into Claude Desktop, Cursor, or Claude Code is:
+
+```sh
+coral mcp install --client claude-desktop   # or: cursor, claude-code
+```
+
+That command writes a `coral` MCP-server entry into the client's config file
+(no JSON editing). Restart the client and it'll spawn `coral mcp-stdio` on
+demand. `coral mcp status --client <name>` shows the current entry;
+`coral mcp uninstall --client <name>` removes it.
+
+For a custom MCP client (or to drive Coral from Python directly):
 
 ```python
 from mcp import ClientSession

@@ -6,6 +6,8 @@ Endpoints (auth-required unless noted):
 - ``POST /auth/handshake``         — no auth, single-use challenge → bearer token.
 - ``POST /sessions``               — capture a session.
 - ``GET /sessions``                — list sessions (no ``state_blob``).
+- ``PUT /sessions/{id}/refresh``   — re-capture in place (PR N2); preserves
+  ``session_id`` so open agent handles don't see the swap.
 - ``DELETE /sessions/{id}``        — revoke a session (zeroes ``state_blob``).
 - ``GET /policies/{origin}``       — read per-origin YAML policy.
 - ``PUT /policies/{origin}``       — upsert per-origin YAML policy.
@@ -352,6 +354,70 @@ async def list_sessions(
         agent_id=auth.name,
     )
     return SessionListResponse(sessions=items)
+
+
+@router.put("/sessions/{session_id}/refresh", response_model=CaptureSessionResponse)
+async def refresh_session(
+    body: CaptureSessionRequest,
+    session_id: str = Path(..., min_length=1, max_length=64),
+    vault: Vault = Depends(get_vault),
+    auth: AuthContext = Depends(require_auth),
+) -> CaptureSessionResponse:
+    """Replace an existing active session's state with a fresh capture from the
+    user's main Chrome (Track N / PR N2).
+
+    Preserves ``session_id`` so any open agent handles for this session aren't
+    invalidated — the agent doesn't see the swap, the next ``coral_open_session``
+    just gets the fresh state.
+
+    - **404** when the session doesn't exist.
+    - **409** when the session is revoked/expired.
+    - **400** when the body's ``origin`` doesn't match the captured session's
+      origin (refresh can't change which site this session is for).
+    """
+    existing = await vault.get_session(session_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="session_not_found")
+    if existing.status != "active":
+        raise HTTPException(status_code=409, detail="session_not_active")
+    if body.origin != existing.origin:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"origin_mismatch: session is for {existing.origin}, "
+                f"refresh payload is for {body.origin}"
+            ),
+        )
+
+    state_dict: dict[str, Any] = body.state.model_dump(mode="json")
+    cookies_raw_obj: Any = state_dict.get("cookies") or []
+    cookie_dicts: list[dict[str, Any]] = []
+    if isinstance(cookies_raw_obj, list):
+        for raw_item in cookies_raw_obj:  # pyright: ignore[reportUnknownVariableType]
+            if isinstance(raw_item, dict):
+                cookie_dicts.append(raw_item)  # pyright: ignore[reportUnknownArgumentType]
+    expires_at = _cookie_min_expiry(cookie_dicts)
+    blob = compress_blob(state_dict)
+
+    await vault.replace_session_state(
+        session_id=session_id,
+        state_blob=blob,
+        expires_at=expires_at,
+    )
+    await _audit(
+        vault,
+        event_type="session.refreshed",
+        detail={
+            "origin": existing.origin,
+            "cookie_count": len(cookie_dicts),
+            "ls_keys": list(state_dict.get("local_storage", {}).keys()),
+            "ss_keys": list(state_dict.get("session_storage", {}).keys()),
+        },
+        agent_id=auth.name,
+        origin=existing.origin,
+        session_id=session_id,
+    )
+    return CaptureSessionResponse(session_id=session_id, status="active", expires_at=expires_at)
 
 
 @router.delete("/sessions/{session_id}", status_code=204)

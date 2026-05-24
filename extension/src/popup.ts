@@ -43,6 +43,9 @@ function humanizeError(raw: string): string {
     token_expired:
       "Token expired (and auto-refresh didn't fire). Click Unpair and re-pair.",
     session_not_found: "Session no longer exists in the vault.",
+    session_not_active:
+      "That session is revoked or expired and can't be refreshed. Capture a " +
+      "new one instead.",
     active_session_exists_for_origin:
       "You already have an active session for this origin. Revoke it first, " +
       "or just use it.",
@@ -70,6 +73,30 @@ function renderSessions(sessions: SessionListItem[]): void {
     statusSpan.className = `status ${s.status}`;
     statusSpan.textContent = s.status;
 
+    const refreshBtn = document.createElement("button");
+    refreshBtn.textContent = "Refresh";
+    refreshBtn.className = "refresh";
+    refreshBtn.title =
+      "Re-capture this session from your current tab without losing the " +
+      "session id. Navigate to " +
+      s.origin +
+      " first.";
+    refreshBtn.disabled = s.status !== "active";
+    refreshBtn.addEventListener("click", async () => {
+      refreshBtn.disabled = true;
+      const r = await rpc({
+        type: "refresh_session",
+        sessionId: s.id,
+        origin: s.origin,
+      });
+      if (r.ok) {
+        renderState(r.state);
+      } else {
+        setError(r.error);
+        refreshBtn.disabled = false;
+      }
+    });
+
     const revokeBtn = document.createElement("button");
     revokeBtn.textContent = "Revoke";
     revokeBtn.disabled = s.status !== "active";
@@ -85,6 +112,7 @@ function renderSessions(sessions: SessionListItem[]): void {
 
     li.appendChild(originSpan);
     li.appendChild(statusSpan);
+    li.appendChild(refreshBtn);
     li.appendChild(revokeBtn);
     list.appendChild(li);
   }

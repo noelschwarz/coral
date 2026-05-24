@@ -411,6 +411,23 @@ class Vault:
         sql = "UPDATE sessions SET state_blob = ?, last_used_at = ? WHERE id = ?"
         await self._enqueue_write(sql, (state_blob, int(time.time()), session_id))
 
+    async def replace_session_state(
+        self,
+        session_id: str,
+        state_blob: bytes,
+        expires_at: int | None,
+    ) -> None:
+        """Wholesale-replace the encrypted state blob and recompute ``expires_at``.
+
+        Used by ``PUT /sessions/{id}/refresh`` (Track N / PR N2) when the user
+        re-captures from their main Chrome to refresh a stale session in-place.
+        Unlike :meth:`update_session_state_blob` this also recomputes
+        ``expires_at`` from the new cookies' min-expiry; the session id, origin,
+        and any open agent handles are preserved.
+        """
+        sql = "UPDATE sessions SET state_blob = ?, expires_at = ?, last_used_at = ? WHERE id = ?"
+        await self._enqueue_write(sql, (state_blob, expires_at, int(time.time()), session_id))
+
     async def revoke_session(self, session_id: str) -> None:
         sql = "UPDATE sessions SET status = 'revoked', state_blob = ? WHERE id = ?"
         await self._enqueue_write(sql, (b"", session_id))

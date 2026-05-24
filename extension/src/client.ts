@@ -84,6 +84,26 @@ export class DaemonClient {
     return this.json<CaptureResponse>("POST", "/sessions", token, body);
   }
 
+  /**
+   * Re-capture an existing session in place (PR N2).
+   *
+   * Preserves the session_id so open agent handles aren't invalidated. The
+   * daemon rejects (409) if the session is already revoked/expired, and (400)
+   * if the body's origin doesn't match the captured session's origin.
+   */
+  async refreshSession(
+    token: string,
+    sessionId: string,
+    body: { origin: string; label?: string; state: StateBlob },
+  ): Promise<CaptureResponse> {
+    return this.json<CaptureResponse>(
+      "PUT",
+      `/sessions/${encodeURIComponent(sessionId)}/refresh`,
+      token,
+      body,
+    );
+  }
+
   async listSessions(token: string): Promise<{ sessions: SessionListItem[] }> {
     return this.json<{ sessions: SessionListItem[] }>("GET", "/sessions", token);
   }

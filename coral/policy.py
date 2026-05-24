@@ -54,6 +54,11 @@ class SessionRules(BaseModel):
     """Session-lifetime constraints from the policy YAML (spec §4.3)."""
 
     max_duration_minutes: int = DEFAULT_SESSION_MAX_DURATION_MINUTES
+    # Track N (PR N3) redefined the semantic: when the daemon detects a
+    # same-origin 401 mid-session, the session is flagged for user attention
+    # (visible in the extension popup) instead of being torn down. The flag
+    # name is preserved for backwards-compat with shipped behavior packs;
+    # consider it "alert on staleness signal." See ADR-018.
     kill_on_redirect_to_login: bool = True
 
 

@@ -48,6 +48,30 @@ Apache-2.0.
   Discussions, PR template with test-plan + threat-model + DCO
   checklist, `CODEOWNERS`, weekly Dependabot for pip / npm
   (extension) / github-actions.
+- **`coral mcp install/uninstall/status`** (Track M, PR M1):
+  one-command wiring of Coral into Claude Desktop, Cursor, and Claude
+  Code config files — no JSON editing.
+- **`examples/` directory** (Track M, PR M2): runnable templates for
+  embedding Coral in your own Python or TypeScript code via
+  [`browser-use`](https://github.com/browser-use/browser-use),
+  [Stagehand](https://github.com/browserbase/stagehand), or the raw
+  `mcp` SDK + Playwright.
+- **Policy-gated cookie write-back on session close** (Track N,
+  PR N1, [ADR-018](docs/ADR-018-storage-writeback.md)): in-flight
+  `Set-Cookie` updates from auth-token refresh now survive to the next
+  session-open, scoped by the policy's `allowed_paths`. Emits
+  `session.state_written_back` with delta counts.
+- **In-place session refresh** (Track N, PR N2):
+  `PUT /sessions/{id}/refresh` HTTP endpoint and a **Refresh** button
+  on every active session in the extension popup. Re-captures fresh
+  state from the user's current tab without losing the `session_id`
+  — open agent handles aren't invalidated.
+- **Attention flagging on stale sessions** (Track N, PR N3): when the
+  daemon sees a same-origin 401 mid-agent-navigation, it flags the
+  session in the vault and the popup surfaces a "needs refresh" badge
+  with a promoted Refresh button. Cleared automatically on refresh or
+  revoke. New `attention_at` / `attention_reason` fields on the
+  `GET /sessions` response.
 
 ### Changed
 
@@ -67,6 +91,21 @@ Apache-2.0.
 - **SECURITY**: GitHub private vulnerability reporting is the
   canonical channel pre-1.0; stale `security@coralbridge.dev` TODO line
   removed.
+- **`kill_on_redirect_to_login` semantic redefined** (Track N, PR N3):
+  the field name is preserved for backwards-compat with the bundled
+  behavior packs, but the runtime behavior is now "flag the session
+  for user attention" instead of "kill the session." Recovery is
+  one Refresh-button click; see [`docs/policy-language.md`](docs/policy-language.md).
+- **`coral list` / `coral status` output** (Track M, PR M3): real
+  columnar tables for `coral list` (id / origin / status / captured /
+  last-used / label), colored ✓/✗ badges and next-step hints for
+  `coral status`.
+- **README**: hoisted a tangible Coral + browser-use code snippet near
+  the top so new readers see the embedding pattern before the install
+  steps. The lower section reframed around `coral mcp install` for
+  IDE-resident agents.
+- **`examples/` READMEs**: reframed around the
+  "drop-into-your-codebase" pattern instead of "run as a script."
 
 ### Fixed
 

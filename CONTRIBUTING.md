@@ -72,6 +72,15 @@ considered, includes a "When to revisit" section.
 5. CI runs Linux + macOS jobs. Both must be green.
 6. Maintainer reviews; once approved, squash-merge.
 
+## Releasing
+
+For tagging a release, building the artifacts, attaching the Chrome
+extension zip, and publishing to PyPI, see
+[`docs/release-process.md`](docs/release-process.md). The release
+workflow is automated end-to-end after a tag push, except for two
+manual gates: the `pypi` GitHub Environment approval and editing the
+draft GitHub Release page before publishing.
+
 ## Developer Certificate of Origin (DCO)
 
 Coral uses the [DCO](https://developercertificate.org/) to confirm that each

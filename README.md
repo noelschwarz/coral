@@ -92,16 +92,28 @@ see [`examples/`](examples/) for both.
 
 ## Requirements
 
-- **Python 3.11+**
-- **macOS** or **Linux** (Windows is not supported yet)
-- SQLCipher native library:
+- **Python 3.11+** (`pip` or `uv`).
+- **macOS** or **Linux**. Windows isn't supported yet.
+- **SQLCipher native library** — install *before* `pip install coralbridge`,
+  because `sqlcipher3` builds against it:
   - macOS — `brew install sqlcipher`
-  - Linux (Debian/Ubuntu) — `sudo apt install libsqlcipher-dev`
-- [**uv**](https://docs.astral.sh/uv/) — `curl -LsSf https://astral.sh/uv/install.sh | sh`
-- **Node 20+** — only if you build the Chrome extension from source (optional
-  when using the pre-built `coral-extension-v0.6.0.zip`)
+  - Debian / Ubuntu — `sudo apt install libsqlcipher-dev`
+  - Fedora / RHEL — `sudo dnf install sqlcipher-devel`
+  - Arch — `sudo pacman -S sqlcipher`
+- **Node 20+** — only required if you want to build the Chrome extension
+  from source. Otherwise grab the pre-built zip from the [latest GitHub
+  release](https://github.com/noelschwarz/coral/releases/latest).
 
 ## Install
+
+```sh
+pip install coralbridge
+playwright install chromium
+```
+
+That's it. `coral` is now on your `PATH` ready to run.
+
+Working from a checkout instead (recommended for contributors):
 
 ```sh
 git clone https://github.com/noelschwarz/coral
@@ -110,12 +122,8 @@ uv sync --all-extras
 uv run playwright install chromium
 ```
 
-If you'd rather have `coral` on your `PATH` instead of typing `uv run coral`
-every time:
-
-```sh
-uv tool install .
-```
+After `uv sync`, use `uv run coral …` everywhere — or run `uv tool install .`
+to get the `coral` script on your `PATH` without prepending `uv run`.
 
 ## Quickstart
 
@@ -133,35 +141,34 @@ challenge to your clipboard**.
 
 ### 2. Load the extension
 
-**Pre-built bundle (recommended)** — no Node.js required. Download
-[`coral-extension-v0.6.0.zip`](https://github.com/noelschwarz/coral/releases/download/v0.6.0/coral-extension-v0.6.0.zip)
-into `extension/`, then:
+**Pre-built bundle (recommended)** — no Node.js required. Grab
+`coral-extension.zip` from the [latest release](https://github.com/noelschwarz/coral/releases/latest),
+unzip it into any directory, and load that directory in Chrome (step 3
+below).
 
 ```sh
-cd extension
-mkdir -p dist-v0.6.0
-unzip -o coral-extension-v0.6.0.zip -d dist-v0.6.0
+mkdir -p ~/coral-extension && cd ~/coral-extension
+curl -L -o coral-extension.zip \
+  https://github.com/noelschwarz/coral/releases/latest/download/coral-extension.zip
+unzip -o coral-extension.zip
 ```
 
-Load `extension/dist-v0.6.0/` in Chrome (step 3 below). The zip is
-gitignored so release bundles stay out of the repo.
-
-**Build from source** — only if you need unreleased extension changes:
+**Build from source** — only if you want unreleased extension changes:
 
 ```sh
 cd extension
 npm ci
 npm run build
+# load extension/dist/ in Chrome
 ```
-
-Load `extension/dist/` instead.
 
 In Chrome:
 
 1. Open `chrome://extensions`.
 2. Toggle **Developer mode** (top-right).
-3. Click **Load unpacked** and select `extension/dist-v0.6.0/` (pre-built)
-   or `extension/dist/` (from source).
+3. Click **Load unpacked** and select the directory from the step above
+   (`~/coral-extension/` for the pre-built bundle, or `extension/dist/`
+   when building from source).
 4. Pin the Coral icon to your toolbar.
 5. Click the icon — the popup auto-detects the clipboard challenge — and
    press **Pair**.
@@ -282,7 +289,9 @@ in [ADR-011](docs/ADR-011-policy-engine.md).
 - [`docs/policy-language.md`](docs/policy-language.md) — YAML policy schema.
 - [`SECURITY.md`](SECURITY.md) — vulnerability reporting policy.
 - [`CHANGELOG.md`](CHANGELOG.md) — release history.
-- `docs/ADR-006` … `docs/ADR-017` — individual architectural decisions.
+- [`docs/release-process.md`](docs/release-process.md) — tagging,
+  building, attaching the extension zip, publishing to PyPI.
+- `docs/ADR-006` … `docs/ADR-018` — individual architectural decisions.
 
 ## Contributing
 

@@ -152,6 +152,8 @@ def _session_to_list_item(rec: SessionRecord) -> SessionListItem:
         last_used_at=rec.last_used_at,
         expires_at=rec.expires_at,
         status=rec.status,
+        attention_at=rec.attention_at,
+        attention_reason=rec.attention_reason,
     )
 
 

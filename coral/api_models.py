@@ -104,6 +104,11 @@ class SessionListItem(BaseModel):
     last_used_at: int | None
     expires_at: int | None
     status: SessionStatus
+    # Track N / PR N3 — populated when the daemon detected a 401 / login
+    # redirect during a recent agent session. The extension popup uses this
+    # to nudge the user toward Refresh.
+    attention_at: int | None = None
+    attention_reason: str | None = None
 
 
 class SessionListResponse(BaseModel):

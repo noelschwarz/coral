@@ -15,6 +15,11 @@ export type SessionListItem = {
   last_used_at: number | null;
   expires_at: number | null;
   status: "active" | "expired" | "revoked";
+  /** Unix-seconds; populated when the daemon flagged this session as stale
+   * during the most recent agent navigation (PR N3). */
+  attention_at?: number | null;
+  /** Short machine-readable reason, e.g. ``"http_401"``. */
+  attention_reason?: string | null;
 };
 
 export type AppState = {

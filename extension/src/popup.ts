@@ -28,6 +28,21 @@ function setError(msg: string | null): void {
   }
 }
 
+/** Human-friendly tooltip for an attention reason code. */
+function humanizeAttentionReason(reason: string | null): string {
+  if (!reason) {
+    return "Coral detected this session might be stale during a recent agent action.";
+  }
+  if (reason === "http_401") {
+    return (
+      "A request during the last agent session returned 401 (unauthorized). " +
+      "The site probably rotated your auth state. Click Refresh after " +
+      "navigating to this origin to update."
+    );
+  }
+  return `Stale (${reason}). Refresh from the matching tab to update.`;
+}
+
 /** Map opaque daemon errors to clear, actionable user-facing messages. */
 function humanizeError(raw: string): string {
   const map: Record<string, string> = {
@@ -65,6 +80,9 @@ function renderSessions(sessions: SessionListItem[]): void {
   empty.hidden = sessions.length > 0;
   for (const s of sessions) {
     const li = document.createElement("li");
+    if (s.attention_at) {
+      li.classList.add("needs-attention");
+    }
     const originSpan = document.createElement("span");
     originSpan.className = "origin";
     originSpan.textContent = s.origin;
@@ -73,9 +91,20 @@ function renderSessions(sessions: SessionListItem[]): void {
     statusSpan.className = `status ${s.status}`;
     statusSpan.textContent = s.status;
 
+    if (s.attention_at) {
+      const attentionSpan = document.createElement("span");
+      attentionSpan.className = "attention";
+      attentionSpan.textContent = "needs refresh";
+      attentionSpan.title = humanizeAttentionReason(s.attention_reason ?? null);
+      li.appendChild(attentionSpan);
+    }
+
     const refreshBtn = document.createElement("button");
     refreshBtn.textContent = "Refresh";
     refreshBtn.className = "refresh";
+    if (s.attention_at) {
+      refreshBtn.classList.add("urgent");
+    }
     refreshBtn.title =
       "Re-capture this session from your current tab without losing the " +
       "session id. Navigate to " +

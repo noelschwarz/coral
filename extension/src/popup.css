@@ -176,6 +176,37 @@ button.link {
   background: rgba(40, 100, 180, 0.08);
 }
 
+/* PR N3: surface "attention required" sessions distinctly so the user sees
+   them at a glance. Amber, not red — the session isn't broken, it just
+   needs a refresh from their main Chrome. */
+#sessions-list li.needs-attention {
+  border-left: 3px solid rgb(200, 130, 30);
+  padding-left: 6px;
+}
+
+#sessions-list .attention {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 1px 6px;
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: rgb(150, 90, 0);
+  background: rgba(200, 130, 30, 0.14);
+  border-radius: 3px;
+}
+
+#sessions-list button.refresh.urgent {
+  color: rgb(150, 90, 0);
+  border-color: rgba(200, 130, 30, 0.6);
+  font-weight: 600;
+}
+
+#sessions-list button.refresh.urgent:hover:not(:disabled) {
+  background: rgba(200, 130, 30, 0.12);
+}
+
 footer {
   margin-top: 14px;
   text-align: right;

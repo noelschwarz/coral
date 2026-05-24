@@ -23,6 +23,8 @@ class SessionRecord(BaseModel):
     status: SessionStatus
     state_blob: bytes
     metadata: str = Field(default="{}")
+    attention_at: int | None = None
+    attention_reason: str | None = None
 
 
 class TokenRecord(BaseModel):

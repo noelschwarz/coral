@@ -341,7 +341,7 @@ class Vault:
             cur = conn.execute(
                 """
                 SELECT id, origin, label, created_at, last_used_at, expires_at,
-                       status, state_blob, metadata
+                       status, state_blob, metadata, attention_at, attention_reason
                 FROM sessions WHERE id = ?
                 """,
                 (session_id,),
@@ -363,6 +363,8 @@ class Vault:
             status=cast(SessionStatus, str(row[6])),
             state_blob=bytes(row[7]),
             metadata=str(row[8]),
+            attention_at=cast(int | None, row[9]),
+            attention_reason=cast(str | None, row[10]),
         )
 
     async def list_sessions(self) -> list[SessionRecord]:
@@ -372,7 +374,7 @@ class Vault:
             cur = conn.execute(
                 """
                 SELECT id, origin, label, created_at, last_used_at, expires_at,
-                       status, state_blob, metadata
+                       status, state_blob, metadata, attention_at, attention_reason
                 FROM sessions ORDER BY created_at DESC
                 """,
             )
@@ -394,6 +396,8 @@ class Vault:
                     status=cast(SessionStatus, str(row[6])),
                     state_blob=bytes(row[7]),
                     metadata=str(row[8]),
+                    attention_at=cast(int | None, row[9]),
+                    attention_reason=cast(str | None, row[10]),
                 )
             )
         return out
@@ -424,12 +428,44 @@ class Vault:
         Unlike :meth:`update_session_state_blob` this also recomputes
         ``expires_at`` from the new cookies' min-expiry; the session id, origin,
         and any open agent handles are preserved.
+
+        Also clears any pending attention flag (PR N3) — the whole point of
+        a refresh is to acknowledge and resolve the staleness signal.
         """
-        sql = "UPDATE sessions SET state_blob = ?, expires_at = ?, last_used_at = ? WHERE id = ?"
+        sql = (
+            "UPDATE sessions "
+            "SET state_blob = ?, expires_at = ?, last_used_at = ?, "
+            "    attention_at = NULL, attention_reason = NULL "
+            "WHERE id = ?"
+        )
         await self._enqueue_write(sql, (state_blob, expires_at, int(time.time()), session_id))
 
+    async def set_session_attention(
+        self, session_id: str, reason: str, *, at: int | None = None
+    ) -> None:
+        """Flag a session for user attention (PR N3).
+
+        Called when the daemon detects a 401 during an agent's navigation.
+        Idempotent — overwrites any previous flag if the session is already
+        marked.
+        """
+        sql = "UPDATE sessions SET attention_at = ?, attention_reason = ? WHERE id = ?"
+        await self._enqueue_write(
+            sql, (at if at is not None else int(time.time()), reason, session_id)
+        )
+
+    async def clear_session_attention(self, session_id: str) -> None:
+        """Clear the attention flag (e.g. after refresh or revoke)."""
+        sql = "UPDATE sessions SET attention_at = NULL, attention_reason = NULL WHERE id = ?"
+        await self._enqueue_write(sql, (session_id,))
+
     async def revoke_session(self, session_id: str) -> None:
-        sql = "UPDATE sessions SET status = 'revoked', state_blob = ? WHERE id = ?"
+        sql = (
+            "UPDATE sessions "
+            "SET status = 'revoked', state_blob = ?, "
+            "    attention_at = NULL, attention_reason = NULL "
+            "WHERE id = ?"
+        )
         await self._enqueue_write(sql, (b"", session_id))
 
     async def insert_token(self, token_hash: str, name: str, expires_at: int) -> None:

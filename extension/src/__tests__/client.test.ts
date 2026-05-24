@@ -108,6 +108,31 @@ describe("DaemonClient", () => {
     });
   });
 
+  it("attention fields round-trip through listSessions", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      mockResponse({
+        sessions: [
+          {
+            id: "s1",
+            origin: "https://example.com",
+            label: null,
+            created_at: 1,
+            last_used_at: null,
+            expires_at: null,
+            status: "active",
+            attention_at: 12345,
+            attention_reason: "http_401",
+          },
+        ],
+      }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const c = new DaemonClient();
+    const { sessions } = await c.listSessions("tok");
+    expect(sessions[0].attention_reason).toBe("http_401");
+    expect(sessions[0].attention_at).toBe(12345);
+  });
+
   it("refreshSession URL-encodes the session id", async () => {
     const fetchMock = vi.fn().mockResolvedValueOnce(
       mockResponse({ session_id: "weird/id", status: "active", expires_at: null }),

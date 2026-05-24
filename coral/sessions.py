@@ -82,6 +82,9 @@ class OpenSession:
     user_data_dir: Path
     engine: PolicyEngine
     timeout_task: asyncio.Task[None] | None = field(default=None, repr=False)
+    # PR N3: set the first time a 401 (or future login-redirect) is seen so
+    # we only flag the vault + audit log once per open session.
+    attention_flagged: bool = field(default=False, repr=False)
 
     def to_open_response(self) -> dict[str, Any]:
         """The §5.2 ``coral_open_session`` response shape."""
@@ -306,6 +309,8 @@ class SessionServer:
                 name=f"coral-session-timeout-{handle[:8]}",
             )
 
+        self._install_attention_listener(session)
+
         await self._audit(
             event_type="session.opened",
             detail={"purpose": purpose, "origin": record.origin, "headless": self._headless},
@@ -526,6 +531,79 @@ class SessionServer:
             diag.warn("policy.load_failed", origin=origin, reason=repr(exc))
             return PolicyEngine(default_policy_for_origin(origin))
         return PolicyEngine(policy)
+
+    def _install_attention_listener(self, session: OpenSession) -> None:
+        """Watch for same-origin 401 responses and flag the session for user
+        attention (PR N3).
+
+        Only same-origin 401s count — third-party 401s from analytics or ad
+        SDKs aren't a staleness signal for the captured session. The flag is
+        set at most once per open session; the next ``coral list`` / popup
+        refresh shows it, and the user can hit Refresh (PR N2) to clear it.
+        """
+        from urllib.parse import urlparse
+
+        try:
+            session_origin = urlparse(session.origin)
+            session_host = session_origin.netloc
+            session_scheme = session_origin.scheme
+        except Exception:
+            return
+
+        def _on_response(response: Any) -> None:
+            if session.attention_flagged:
+                return
+            try:
+                if int(response.status) != 401:
+                    return
+            except (TypeError, ValueError):
+                return
+            try:
+                parsed = urlparse(str(response.url))
+            except Exception:
+                return
+            if parsed.netloc != session_host or parsed.scheme != session_scheme:
+                return
+            # Mark synchronously so a burst of 401s only schedules one writer.
+            session.attention_flagged = True
+            asyncio.create_task(
+                self._record_attention(
+                    session_id=session.session_id,
+                    agent_id=session.agent_id,
+                    origin=session.origin,
+                    reason="http_401",
+                ),
+                name=f"coral-attention-{session.session_id[:8]}",
+            )
+
+        session.context.on("response", _on_response)
+
+    async def _record_attention(
+        self,
+        *,
+        session_id: str,
+        agent_id: str,
+        origin: str,
+        reason: str,
+    ) -> None:
+        """Persist the attention flag + emit the audit event (PR N3)."""
+        try:
+            await self._vault.set_session_attention(session_id, reason)
+        except Exception as exc:
+            diag.warn(
+                "session.attention.write_failed",
+                reason=repr(exc),
+                session_id=session_id,
+            )
+            return
+        await self._audit(
+            event_type="session.attention_required",
+            detail={"reason": reason},
+            session_id=session_id,
+            agent_id=agent_id,
+            origin=origin,
+        )
+        diag.info("session.attention_required", session_id=session_id, reason=reason)
 
     async def _install_route_handler(
         self,

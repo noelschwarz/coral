@@ -595,3 +595,78 @@ async def test_refresh_unauthenticated_401(fresh_vault: Vault) -> None:
             json={"origin": "https://x.example", "state": {"version": 1, "cookies": []}},
         )
     assert r.status_code == 401
+
+
+# Attention (PR N3) ---------------------------------------------------------
+
+
+async def test_attention_flag_round_trips_via_session_list(fresh_vault: Vault) -> None:
+    challenge = "ABCD-EFGH-JKLM-NPQR"
+    client, _ = await _client(fresh_vault, challenge=challenge)
+    async with client:
+        token = await _bootstrap_token(client, challenge)
+        sid = await _capture_and_get_sid(client, token, origin="https://stale.example")
+
+        await fresh_vault.set_session_attention(sid, "http_401")
+
+        r = await client.get("/sessions", headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 200
+    items = r.json()["sessions"]
+    item = next(s for s in items if s["id"] == sid)
+    assert item["attention_reason"] == "http_401"
+    assert isinstance(item["attention_at"], int)
+
+
+async def test_refresh_clears_attention_flag(fresh_vault: Vault) -> None:
+    challenge = "ABCD-EFGH-JKLM-NPQR"
+    client, _ = await _client(fresh_vault, challenge=challenge)
+    async with client:
+        token = await _bootstrap_token(client, challenge)
+        sid = await _capture_and_get_sid(client, token, origin="https://refresh-clears.example")
+        await fresh_vault.set_session_attention(sid, "http_401")
+
+        await client.put(
+            f"/sessions/{sid}/refresh",
+            json={
+                "origin": "https://refresh-clears.example",
+                "state": {"version": 1, "cookies": [{"name": "sid", "value": "v1"}]},
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        r = await client.get("/sessions", headers={"Authorization": f"Bearer {token}"})
+    item = next(s for s in r.json()["sessions"] if s["id"] == sid)
+    assert item["attention_at"] is None
+    assert item["attention_reason"] is None
+
+
+async def test_revoke_clears_attention_flag(fresh_vault: Vault) -> None:
+    challenge = "ABCD-EFGH-JKLM-NPQR"
+    client, _ = await _client(fresh_vault, challenge=challenge)
+    async with client:
+        token = await _bootstrap_token(client, challenge)
+        sid = await _capture_and_get_sid(client, token, origin="https://revoke-clears.example")
+        await fresh_vault.set_session_attention(sid, "http_401")
+
+        del_res = await client.delete(
+            f"/sessions/{sid}", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert del_res.status_code == 204
+
+        rec = await fresh_vault.get_session(sid)
+    assert rec is not None
+    assert rec.attention_at is None
+    assert rec.attention_reason is None
+
+
+async def test_clear_session_attention_is_idempotent(fresh_vault: Vault) -> None:
+    challenge = "ABCD-EFGH-JKLM-NPQR"
+    client, _ = await _client(fresh_vault, challenge=challenge)
+    async with client:
+        token = await _bootstrap_token(client, challenge)
+        sid = await _capture_and_get_sid(client, token, origin="https://idem.example")
+        # Calling clear on a session that was never flagged is a no-op.
+        await fresh_vault.clear_session_attention(sid)
+        rec = await fresh_vault.get_session(sid)
+    assert rec is not None
+    assert rec.attention_at is None

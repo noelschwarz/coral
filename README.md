@@ -29,6 +29,67 @@ agent a CDP URL it can drive. **The agent never sees your password.**
 - **MCP** — any MCP-speaking agent (Claude Desktop, Cursor, Claude Code,
   browser-use, Stagehand, …) drives Coral over stdio or local HTTP.
 
+## What it looks like in your code
+
+The dominant use case is **embedding Coral as a session manager inside
+your own agent code**. You log in to a site once in your real Chrome,
+Coral persists the session in an encrypted vault, and your application
+hands the agent of your choice an authenticated, isolated browser via
+CDP. The agent never sees a password.
+
+Here's the whole pattern with [`browser-use`](https://github.com/browser-use/browser-use):
+
+```python
+from mcp import ClientSession
+from mcp.client.stdio import StdioServerParameters, stdio_client
+from browser_use import Agent, Browser
+from langchain_openai import ChatOpenAI
+
+
+async def run_against_my_session(task: str, origin: str) -> str:
+    """Drive an authenticated browser via an LLM, without ever handling
+    the user's password. Coral owns the session; browser-use drives it."""
+    server = StdioServerParameters(command="coral", args=["mcp-stdio"])
+
+    async with stdio_client(server) as (r, w), ClientSession(r, w) as coral:
+        await coral.initialize()
+
+        listing = await coral.call_tool("coral_list_sessions", {})
+        sessions = listing.structuredContent["sessions"]
+        chosen = next(
+            s for s in sessions if s["origin"] == origin and s["state"] == "active"
+        )
+
+        opened = await coral.call_tool(
+            "coral_open_session",
+            {"session_id": chosen["session_id"], "purpose": task},
+        )
+        cdp_url = opened.structuredContent["cdp_url"]
+        handle  = opened.structuredContent["session_handle"]
+
+        try:
+            agent = Agent(
+                task=task,
+                llm=ChatOpenAI(model="gpt-4o"),
+                browser=Browser(cdp_url=cdp_url),   # Coral's isolated Chromium
+            )
+            return str(await agent.run())
+        finally:
+            await coral.call_tool("coral_close_session", {"session_handle": handle})
+```
+
+That snippet drops into any Python codebase — a CLI subcommand, a
+FastAPI handler, a worker, a notebook cell. **Coral provides the
+authenticated, policy-checked browser; `browser-use` provides the
+LLM-driven action loop. They meet at the CDP URL.** Every navigation
+the agent makes still flows through Coral's policy engine; denied
+paths abort before the network call.
+
+The same pattern works with [Stagehand](https://github.com/browserbase/stagehand)
+in TypeScript, or with the raw `mcp` SDK + Playwright if you're
+building your own action loop —
+see [`examples/`](examples/) for both.
+
 ## Requirements
 
 - **Python 3.11+**
@@ -139,63 +200,37 @@ To undo:
 coral uninstall-service
 ```
 
-## Use it from an MCP agent
+## Wire Coral into your MCP client
 
-The fastest way to wire Coral into Claude Desktop, Cursor, or Claude Code is:
+If you'd rather have your IDE-resident agent (Claude Desktop, Cursor,
+Claude Code) call Coral on its own — instead of embedding the snippet
+above in your own code — one command writes the config:
 
 ```sh
 coral mcp install --client claude-desktop   # or: cursor, claude-code
 ```
 
-That command writes a `coral` MCP-server entry into the client's config file
-(no JSON editing). Restart the client and it'll spawn `coral mcp-stdio` on
-demand. `coral mcp status --client <name>` shows the current entry;
+That writes a `coral` MCP-server entry into the client's config file
+(no JSON editing). Restart the client and it'll spawn `coral mcp-stdio`
+on demand. The LLM in your IDE can then call `coral_list_sessions` /
+`coral_open_session` / `coral_close_session` itself as part of any chat
+task. `coral mcp status --client <name>` shows the current entry;
 `coral mcp uninstall --client <name>` removes it.
 
-For a custom MCP client (or to drive Coral from Python directly):
+For embedding Coral inside your own application code, see the
+[snippet above](#what-it-looks-like-in-your-code) and the
+[`examples/`](examples/) directory:
 
-```python
-from mcp import ClientSession
-from mcp.client.stdio import StdioServerParameters, stdio_client
-from playwright.async_api import async_playwright
-
-server = StdioServerParameters(command="coral", args=["mcp-stdio"])
-
-async with stdio_client(server) as (read, write), ClientSession(read, write) as s:
-    await s.initialize()
-
-    res = await s.call_tool(
-        "coral_open_session",
-        {"session_id": "<uuid from `coral list`>", "purpose": "read my feed"},
-    )
-    cdp_url = res.structuredContent["cdp_url"]
-    handle  = res.structuredContent["session_handle"]
-
-    async with async_playwright() as pw:
-        browser = await pw.chromium.connect_over_cdp(cdp_url)
-        ctx = browser.contexts[0]            # restored, isolated, authenticated
-        page = await ctx.new_page()
-        await page.goto("https://github.com/issues")
-        # ... drive the agent ...
-        await browser.close()
-
-    await s.call_tool("coral_close_session", {"session_handle": handle})
-```
-
-Each `coral_open_session` launches its own Chromium for isolation
-([ADR-010](docs/ADR-010-per-session-chromium.md)). Every navigation routes
-through the policy engine; denied paths abort before the network call.
-
-### Working examples
-
-Runnable end-to-end examples live in [`examples/`](examples/):
-
-- [`examples/python_mcp/`](examples/python_mcp/) — pure Python + `mcp`
-  SDK + Playwright. Smallest possible loop.
-- [`examples/browser_use/`](examples/browser_use/) — LLM-orchestrated
-  agent via [`browser-use`](https://github.com/browser-use/browser-use).
-- [`examples/stagehand/`](examples/stagehand/) — TypeScript agent via
+- [`examples/browser_use/`](examples/browser_use/) — Python +
+  [browser-use](https://github.com/browser-use/browser-use) LLM agent.
+- [`examples/stagehand/`](examples/stagehand/) — TypeScript +
   [Stagehand](https://github.com/browserbase/stagehand).
+- [`examples/python_mcp/`](examples/python_mcp/) — raw `mcp` SDK +
+  Playwright for custom action loops.
+
+Per-session Chromium isolation ([ADR-010](docs/ADR-010-per-session-chromium.md))
+keeps every session in its own sandboxed profile no matter which
+client drives it.
 
 Copy, modify, and discard.
 

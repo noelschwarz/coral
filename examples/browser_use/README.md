@@ -1,18 +1,81 @@
-# Example: Coral + [`browser-use`](https://github.com/browser-use/browser-use)
+# Example: Coral + [`browser-use`](https://github.com/browser-use/browser-use) inside your code
 
-`browser-use` is a popular Python framework for LLM-orchestrated browser
-automation. It typically launches its own browser; here we hand it a
-Coral-managed authenticated browser instead, so the LLM operates on a
-session you logged into yourself.
+`browser-use` is a popular Python framework for LLM-orchestrated
+browser automation. By default it launches its own browser; this
+example shows the canonical pattern for using Coral as the **session
+manager** inside `browser-use`'s host application — so the agent
+operates on a session **you** logged into yourself, with no password
+or cookie ever crossing the agent boundary.
+
+## The pattern (drop into your own code)
+
+The whole thing is one async function. Lift it into your application
+verbatim — a CLI subcommand, a FastAPI handler, a background worker, a
+notebook cell, whatever:
+
+```python
+from mcp import ClientSession
+from mcp.client.stdio import StdioServerParameters, stdio_client
+from browser_use import Agent, Browser
+from langchain_openai import ChatOpenAI
+
+
+async def run_against_my_session(task: str, origin: str) -> str:
+    """Drive an authenticated browser via an LLM, without ever handling the
+    user's password. Coral owns the session; browser-use drives it."""
+    server = StdioServerParameters(command="coral", args=["mcp-stdio"])
+
+    async with stdio_client(server) as (r, w), ClientSession(r, w) as coral:
+        await coral.initialize()
+
+        listing = await coral.call_tool("coral_list_sessions", {})
+        sessions = listing.structuredContent["sessions"]
+        chosen = next(
+            s for s in sessions if s["origin"] == origin and s["state"] == "active"
+        )
+
+        opened = await coral.call_tool(
+            "coral_open_session",
+            {"session_id": chosen["session_id"], "purpose": task},
+        )
+        cdp_url = opened.structuredContent["cdp_url"]
+        handle  = opened.structuredContent["session_handle"]
+
+        try:
+            agent = Agent(
+                task=task,
+                llm=ChatOpenAI(model="gpt-4o"),
+                browser=Browser(cdp_url=cdp_url),  # Coral's isolated Chromium
+            )
+            return str(await agent.run())
+        finally:
+            await coral.call_tool("coral_close_session", {"session_handle": handle})
+```
+
+That's the whole story.
+
+- **Coral** is your session manager. It provides an authenticated,
+  policy-checked, isolated Chromium for one task and tears it down
+  cleanly afterward.
+- **browser-use** is your action loop. Its LLM never sees a password,
+  never gets a long-lived browser handle, never decides which session
+  to use — that's your application's job.
+- **They meet at `cdp_url`**. browser-use attaches to the Chromium
+  Coral launched, and every navigation it makes still flows through
+  Coral's policy engine. Denied paths abort before the network call.
 
 ## Prerequisites
 
-- `coral` on your `PATH`, with at least one captured session.
-- An LLM API key — set `OPENAI_API_KEY` (or whatever your `browser-use`
-  config expects).
+- `coral` on your `PATH` with at least one captured session
+  (`coral list`).
+- An LLM API key for whichever provider you give to `browser-use`
+  (`OPENAI_API_KEY` for the snippet above).
 - The dependencies in [`requirements.txt`](requirements.txt).
 
-## Run it
+## Smoke-testing this example as a script (optional)
+
+If you want to confirm everything is wired up before embedding the
+pattern in your application:
 
 ```sh
 cd examples/browser_use
@@ -21,28 +84,12 @@ pip install -r requirements.txt
 playwright install chromium
 
 export OPENAI_API_KEY=sk-…
-export CORAL_SESSION_ORIGIN=https://github.com   # or whichever you captured
+export CORAL_SESSION_ORIGIN=https://github.com   # whichever you captured
 
 python main.py
 ```
 
-You'll see the agent's reasoning in stderr while it drives the
-restored browser.
-
-## What's happening
-
-1. We connect to Coral over stdio MCP and call `coral_open_session` for
-   the session matching `$CORAL_SESSION_ORIGIN`.
-2. Coral hands back a CDP URL for an isolated, authenticated Chromium.
-3. We give `browser-use`'s `Agent` that CDP URL via the `cdp_url`
-   parameter, so it attaches to the Coral-launched browser rather than
-   launching its own.
-4. The agent does its thing. Every navigation is still policy-checked by
-   Coral — if it tries to hit a denied path, it'll see an aborted load.
-5. We close the session via Coral when the agent finishes.
-
-## Adapting it
-
-The natural-language `task` at the bottom of `main.py` is just a string.
-Swap it for whatever the agent should do. Coral keeps the policy
-boundaries intact regardless of what the LLM decides to do next.
+`main.py` is a thin runnable wrapper around the same pattern shown
+above; it exists so you can verify the install in one command. The
+real artifact is the snippet — copy it into your codebase, swap the
+`task` string for what your agent should actually do, ship.

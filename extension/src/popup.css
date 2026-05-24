@@ -159,10 +159,21 @@ button.link {
   background: transparent;
   color: rgb(180, 30, 50);
   border: 1px solid rgba(180, 30, 50, 0.4);
+  margin-left: 4px;
 }
 
 #sessions-list button:hover:not(:disabled) {
   background: rgba(180, 30, 50, 0.08);
+}
+
+/* Refresh isn't destructive — use a neutral palette to set it apart from Revoke. */
+#sessions-list button.refresh {
+  color: rgb(40, 100, 180);
+  border-color: rgba(40, 100, 180, 0.4);
+}
+
+#sessions-list button.refresh:hover:not(:disabled) {
+  background: rgba(40, 100, 180, 0.08);
 }
 
 footer {

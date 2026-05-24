@@ -122,6 +122,30 @@ async function handleRevoke(sessionId: string): Promise<AppState> {
   return buildState(persisted);
 }
 
+async function handleRefresh(
+  sessionId: string,
+  origin: string,
+): Promise<AppState> {
+  const persisted = await loadState(storageArea());
+  if (!isTokenValid(persisted, now()) || !persisted.token) {
+    throw new Error("not paired");
+  }
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tab) throw new Error("no active tab");
+  if (!tab.url || originOfUrl(tab.url) !== origin) {
+    // The user's main Chrome isn't on the right site to re-capture state.
+    // Surface a specific, actionable error rather than a generic mismatch.
+    throw new Error(
+      `Navigate to ${origin} in this window and try again — the active tab ` +
+        "needs to be on the same origin to refresh the session.",
+    );
+  }
+  const { state } = await captureStateForTab(tab);
+  const client = new DaemonClient(persisted.daemonBase);
+  await client.refreshSession(persisted.token, sessionId, { origin, state });
+  return buildState(persisted);
+}
+
 async function handleUnpair(): Promise<AppState> {
   const persisted = await loadState(storageArea());
   await saveState(storageArea(), { ...emptyState(), daemonBase: persisted.daemonBase });
@@ -166,6 +190,9 @@ chrome.runtime.onMessage.addListener(
             break;
           case "capture":
             state = await handleCapture(msg.origin, msg.label);
+            break;
+          case "refresh_session":
+            state = await handleRefresh(msg.sessionId, msg.origin);
             break;
           case "revoke_session":
             state = await handleRevoke(msg.sessionId);

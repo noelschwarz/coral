@@ -75,4 +75,60 @@ describe("DaemonClient", () => {
     expect(url).toBe("http://127.0.0.1:8765/sessions/session-uuid-123");
     expect(init.method).toBe("DELETE");
   });
+
+  it("refreshSession PUTs to /sessions/{id}/refresh with state body", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      mockResponse({ session_id: "session-uuid-123", status: "active", expires_at: 9999 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const c = new DaemonClient();
+    const stateBlob = {
+      version: 1 as const,
+      captured_at: 100,
+      user_agent: "test",
+      origin: "https://example.com",
+      cookies: [],
+      local_storage: {},
+      session_storage: {},
+    };
+    const r = await c.refreshSession("tok", "session-uuid-123", {
+      origin: "https://example.com",
+      state: stateBlob,
+    });
+
+    expect(r.session_id).toBe("session-uuid-123");
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toBe("http://127.0.0.1:8765/sessions/session-uuid-123/refresh");
+    expect(init.method).toBe("PUT");
+    expect(init.headers).toMatchObject({ Authorization: "Bearer tok" });
+    expect(JSON.parse(init.body)).toEqual({
+      origin: "https://example.com",
+      state: stateBlob,
+    });
+  });
+
+  it("refreshSession URL-encodes the session id", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce(
+      mockResponse({ session_id: "weird/id", status: "active", expires_at: null }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const c = new DaemonClient();
+    await c.refreshSession("tok", "weird/id", {
+      origin: "https://example.com",
+      state: {
+        version: 1,
+        captured_at: 1,
+        user_agent: "x",
+        origin: "https://example.com",
+        cookies: [],
+        local_storage: {},
+        session_storage: {},
+      },
+    });
+
+    const [url] = fetchMock.mock.calls[0];
+    expect(url).toBe("http://127.0.0.1:8765/sessions/weird%2Fid/refresh");
+  });
 });

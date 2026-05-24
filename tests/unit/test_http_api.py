@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import AsyncIterator
+from typing import Any
 
 import httpx
 import pytest
@@ -456,3 +457,141 @@ async def test_token_revoke_unknown_404(fresh_vault: Vault) -> None:
             headers={"Authorization": f"Bearer {token}"},
         )
     assert r.status_code == 404
+
+
+# Refresh (PR N2) -----------------------------------------------------------
+
+
+async def _capture_and_get_sid(
+    client: httpx.AsyncClient,
+    token: str,
+    *,
+    origin: str = "https://refresh.example",
+    cookies: list[dict[str, Any]] | None = None,
+) -> str:
+    body = {
+        "origin": origin,
+        "state": {
+            "version": 1,
+            "cookies": cookies if cookies is not None else [{"name": "sid", "value": "v0"}],
+        },
+    }
+    r = await client.post("/sessions", json=body, headers={"Authorization": f"Bearer {token}"})
+    assert r.status_code == 200, r.text
+    return str(r.json()["session_id"])
+
+
+async def test_refresh_replaces_state_and_preserves_session_id(fresh_vault: Vault) -> None:
+    challenge = "ABCD-EFGH-JKLM-NPQR"
+    client, _ = await _client(fresh_vault, challenge=challenge)
+    async with client:
+        token = await _bootstrap_token(client, challenge)
+        sid = await _capture_and_get_sid(client, token)
+
+        body = {
+            "origin": "https://refresh.example",
+            "state": {
+                "version": 1,
+                "cookies": [
+                    {"name": "sid", "value": "v1-rotated", "expires": int(time.time()) + 7200},
+                    {"name": "csrf", "value": "fresh"},
+                ],
+            },
+        }
+        r = await client.put(
+            f"/sessions/{sid}/refresh",
+            json=body,
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["session_id"] == sid  # preserved
+    assert data["status"] == "active"
+    assert data["expires_at"] is not None
+
+
+async def test_refresh_unknown_session_404(fresh_vault: Vault) -> None:
+    challenge = "ABCD-EFGH-JKLM-NPQR"
+    client, _ = await _client(fresh_vault, challenge=challenge)
+    async with client:
+        token = await _bootstrap_token(client, challenge)
+        body = {
+            "origin": "https://nowhere.example",
+            "state": {"version": 1, "cookies": []},
+        }
+        r = await client.put(
+            "/sessions/00000000-0000-0000-0000-000000000000/refresh",
+            json=body,
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    assert r.status_code == 404
+    assert r.json()["error"] == "session_not_found"
+
+
+async def test_refresh_after_revoke_409(fresh_vault: Vault) -> None:
+    challenge = "ABCD-EFGH-JKLM-NPQR"
+    client, _ = await _client(fresh_vault, challenge=challenge)
+    async with client:
+        token = await _bootstrap_token(client, challenge)
+        sid = await _capture_and_get_sid(client, token)
+        del_res = await client.delete(
+            f"/sessions/{sid}", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert del_res.status_code == 204
+        r = await client.put(
+            f"/sessions/{sid}/refresh",
+            json={
+                "origin": "https://refresh.example",
+                "state": {"version": 1, "cookies": []},
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    assert r.status_code == 409
+    assert r.json()["error"] == "session_not_active"
+
+
+async def test_refresh_origin_mismatch_400(fresh_vault: Vault) -> None:
+    challenge = "ABCD-EFGH-JKLM-NPQR"
+    client, _ = await _client(fresh_vault, challenge=challenge)
+    async with client:
+        token = await _bootstrap_token(client, challenge)
+        sid = await _capture_and_get_sid(client, token, origin="https://a.example")
+        r = await client.put(
+            f"/sessions/{sid}/refresh",
+            json={
+                "origin": "https://b.example",  # different origin
+                "state": {"version": 1, "cookies": []},
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    assert r.status_code == 400
+    assert "origin_mismatch" in r.json()["error"]
+
+
+async def test_refresh_writes_audit_event(fresh_vault: Vault) -> None:
+    challenge = "ABCD-EFGH-JKLM-NPQR"
+    client, _ = await _client(fresh_vault, challenge=challenge)
+    async with client:
+        token = await _bootstrap_token(client, challenge)
+        sid = await _capture_and_get_sid(client, token)
+        await client.put(
+            f"/sessions/{sid}/refresh",
+            json={
+                "origin": "https://refresh.example",
+                "state": {"version": 1, "cookies": [{"name": "sid", "value": "v1"}]},
+            },
+            headers={"Authorization": f"Bearer {token}"},
+        )
+    rows = await fresh_vault.query_audit(since=None, limit=20)
+    assert any(r.event_type == "session.refreshed" and r.session_id == sid for r in rows)
+
+
+async def test_refresh_unauthenticated_401(fresh_vault: Vault) -> None:
+    challenge = "ABCD-EFGH-JKLM-NPQR"
+    client, _ = await _client(fresh_vault, challenge=challenge)
+    async with client:
+        r = await client.put(
+            "/sessions/anything/refresh",
+            json={"origin": "https://x.example", "state": {"version": 1, "cookies": []}},
+        )
+    assert r.status_code == 401

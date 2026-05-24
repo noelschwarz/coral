@@ -36,6 +36,7 @@ export type PopupRequest =
   | { type: "get_state" }
   | { type: "pair"; challenge: string }
   | { type: "capture"; origin: string; label?: string }
+  | { type: "refresh_session"; sessionId: string; origin: string }
   | { type: "revoke_session"; sessionId: string }
   | { type: "unpair" };
 

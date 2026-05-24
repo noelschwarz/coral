@@ -28,11 +28,19 @@ rate_limits:
   actions_per_hour: 500
 session:
   max_duration_minutes: 60
-  kill_on_redirect_to_login: true
+  kill_on_redirect_to_login: true  # see note below
 ```
 
 Unknown top-level fields are rejected (`extra: forbid` on the Pydantic model).
 Field omissions fall back to sensible defaults — only `origin` is mandatory.
+
+> **Note on `kill_on_redirect_to_login`.** The field is preserved for
+> backwards-compatibility with shipped behavior packs, but the semantic
+> changed in [ADR-018](ADR-018-storage-writeback.md) / PR N3: when a
+> same-origin 401 is detected mid-session, the daemon **flags the
+> session for user attention** (visible in the extension popup) instead
+> of tearing it down. The user clicks Refresh to re-capture from their
+> main Chrome and clear the flag.
 
 ## Decision order
 

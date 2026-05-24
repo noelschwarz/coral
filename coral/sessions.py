@@ -31,7 +31,7 @@ import urllib.request
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from coral import diag
 from coral.policy import (
@@ -40,7 +40,7 @@ from coral.policy import (
     load_policy_yaml,
 )
 from coral.restoration import apply_state_blob
-from coral.vault import Vault, decompress_blob
+from coral.vault import Vault, compress_blob, decompress_blob
 
 if TYPE_CHECKING:
     from playwright.async_api import (
@@ -133,6 +133,60 @@ CORAL_DAEMON_HOME_ENV = "CORAL_DAEMON_HOME"
 Used by :func:`recovery_kill_orphan_browsers` to identify browsers that
 survived a crashed previous daemon run for the *same* ``$CORAL_HOME``.
 """
+
+
+# ---- ADR-018: storage write-back helpers -------------------------------------
+
+
+_COOKIE_KEY_FIELDS = ("name", "domain", "path")
+_COOKIE_VALUE_FIELDS = ("value", "expires", "httpOnly", "secure", "sameSite")
+
+
+def _glob_literal_prefix(pattern: str) -> str:
+    """Return ``pattern`` truncated at the first glob metacharacter.
+
+    ``"/api/v1/**" -> "/api/v1/"``; ``"/issues" -> "/issues"``; ``"**" -> ""``.
+    """
+    for i, ch in enumerate(pattern):
+        if ch in "*?[":
+            return pattern[:i]
+    return pattern
+
+
+def _cookie_path_allowed(cookie_path: str, allowed_paths: list[str]) -> bool:
+    """Decide whether a cookie scoped to ``cookie_path`` is policy-admissible.
+
+    Semantics (ADR-018):
+
+    - A cookie at ``/`` applies to anything under the origin. Admit if the
+      policy has any ``allowed_paths`` at all.
+    - A cookie at ``/foo`` applies to URLs starting with ``/foo``. Admit if
+      any ``allowed_paths`` entry's literal prefix starts with ``cookie_path``
+      (i.e. the policy allows at least one URL the cookie applies to).
+    """
+    if not allowed_paths:
+        return False
+    if cookie_path == "/":
+        return True
+    for pattern in allowed_paths:
+        prefix = _glob_literal_prefix(pattern)
+        if prefix.startswith(cookie_path):
+            return True
+    return False
+
+
+def _cookie_key(c: dict[str, Any]) -> tuple[str, str, str]:
+    """Stable identity for diffing: ``(name, domain, path)``."""
+    return (
+        str(c.get("name", "")),
+        str(c.get("domain", "")),
+        str(c.get("path", "/")),
+    )
+
+
+def _cookies_equal(a: dict[str, Any], b: dict[str, Any]) -> bool:
+    """Equality across the value-bearing fields of a cookie."""
+    return all(a.get(name) == b.get(name) for name in _COOKIE_VALUE_FIELDS)
 
 
 class SessionServer:
@@ -269,13 +323,27 @@ class SessionServer:
         return session
 
     async def close(self, handle: str, *, reason: str = "agent_closed") -> None:
-        """Tear down a single open session. Idempotent."""
+        """Tear down a single open session. Idempotent.
+
+        Before closing the Chromium context, attempts a policy-gated cookie
+        write-back (ADR-018). Write-back is best-effort — any failure is
+        logged but never blocks the close path.
+        """
         async with self._lock:
             session = self._handles.pop(handle, None)
         if session is None:
             return
         if session.timeout_task is not None and not session.timeout_task.done():
             session.timeout_task.cancel()
+        writeback_counts: dict[str, int] | None = None
+        try:
+            writeback_counts = await self._writeback_state(session=session, reason=reason)
+        except Exception as exc:  # never let writeback block close
+            diag.warn(
+                "session.writeback.unexpected_error",
+                reason=repr(exc),
+                session_id=session.session_id,
+            )
         with contextlib.suppress(Exception):
             await session.context.close()
         shutil.rmtree(session.user_data_dir, ignore_errors=True)
@@ -286,7 +354,138 @@ class SessionServer:
             agent_id=session.agent_id,
             origin=session.origin,
         )
+        if writeback_counts is not None:
+            await self._audit(
+                event_type="session.state_written_back",
+                detail=writeback_counts,
+                session_id=session.session_id,
+                agent_id=session.agent_id,
+                origin=session.origin,
+            )
         diag.info("session.closed", handle=handle, reason=reason)
+
+    async def _writeback_state(
+        self,
+        *,
+        session: OpenSession,
+        reason: str,
+    ) -> dict[str, int] | None:
+        """Diff the live cookie jar against the captured blob and persist the
+        policy-admitted delta (ADR-018).
+
+        Returns counts (``added``, ``updated``, ``dropped_by_policy``,
+        ``unchanged``) when something was persisted, or ``None`` when the
+        write-back was skipped (revoke / shutdown / nothing to persist /
+        soft failure).
+        """
+        if reason in ("session_revoked", "daemon_shutdown"):
+            return None
+
+        allowed_paths = session.engine.policy.allowed_paths
+        if not allowed_paths:
+            return None
+
+        try:
+            live_cookies = await session.context.cookies()
+        except Exception as exc:
+            diag.warn(
+                "session.writeback.cookies_unavailable",
+                reason=repr(exc),
+                session_id=session.session_id,
+            )
+            return None
+
+        record = await self._vault.get_session(session.session_id)
+        if record is None or record.status != "active":
+            return None
+        try:
+            original_blob = decompress_blob(record.state_blob)
+        except Exception as exc:
+            diag.warn(
+                "session.writeback.decompress_failed",
+                reason=repr(exc),
+                session_id=session.session_id,
+            )
+            return None
+
+        original_raw: Any = original_blob.get("cookies") or []
+        if not isinstance(original_raw, list):
+            return None
+        raw_list: list[Any] = cast(list[Any], original_raw)
+        original_cookies: list[dict[str, Any]] = [
+            cast(dict[str, Any], c) for c in raw_list if isinstance(c, dict)
+        ]
+        original_by_key: dict[tuple[str, str, str], dict[str, Any]] = {
+            _cookie_key(c): c for c in original_cookies
+        }
+
+        counts: dict[str, int] = {
+            "unchanged": 0,
+            "updated": 0,
+            "added": 0,
+            "dropped_by_policy": 0,
+        }
+        merged: list[dict[str, Any]] = []
+        seen_keys: set[tuple[str, str, str]] = set()
+
+        for live_raw in live_cookies:
+            live: dict[str, Any] = dict(live_raw)
+            key = _cookie_key(live)
+            seen_keys.add(key)
+            cookie_path = str(live.get("path", "/"))
+            if not _cookie_path_allowed(cookie_path, allowed_paths):
+                counts["dropped_by_policy"] += 1
+                if key in original_by_key:
+                    merged.append(original_by_key[key])
+                continue
+            if key in original_by_key:
+                if _cookies_equal(original_by_key[key], live):
+                    counts["unchanged"] += 1
+                else:
+                    counts["updated"] += 1
+            else:
+                counts["added"] += 1
+            merged.append(live)
+
+        # Preserve originals not seen in the live jar (server-side expiry vs.
+        # agent-side delete is indistinguishable from here — conservative
+        # default is "keep the original"; documented in ADR-018).
+        for key, cookie in original_by_key.items():
+            if key not in seen_keys:
+                merged.append(cookie)
+
+        if not (counts["added"] or counts["updated"]):
+            # Nothing to persist. Skip the round-trip; don't even audit.
+            return None
+
+        new_blob = dict(original_blob)
+        new_blob["cookies"] = merged
+        try:
+            compressed = compress_blob(new_blob)
+        except Exception as exc:
+            diag.warn(
+                "session.writeback.compress_failed",
+                reason=repr(exc),
+                session_id=session.session_id,
+            )
+            return None
+
+        try:
+            await self._vault.update_session_state_blob(session.session_id, compressed)
+        except Exception as exc:
+            diag.warn(
+                "session.writeback.vault_write_failed",
+                reason=repr(exc),
+                session_id=session.session_id,
+            )
+            return None
+
+        diag.info(
+            "session.state_written_back",
+            session_id=session.session_id,
+            **counts,
+        )
+        return counts
 
     async def shutdown(self) -> None:
         """Close every open session (called on daemon shutdown)."""

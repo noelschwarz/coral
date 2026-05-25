@@ -8,6 +8,9 @@ explicit 4-gate bar for `1.0.0`.
 
 ## [Unreleased]
 
+*(Nothing yet — `v0.6.0` was just published. Add new entries here as
+PRs land; they'll roll into the next tagged release.)*
+
 ## [0.6.0] — 2026-05
 
 The "ready to publish" release. Architectural cleanup around vault

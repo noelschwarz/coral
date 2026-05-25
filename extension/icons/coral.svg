@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Coral Chrome extension icon (PR: extension icon).
+
+  Design: a bold white "C" inside a rounded-square coral-pink gradient.
+  Single dominant colour, no fine detail — readable at 16×16 in the
+  toolbar and still clean at 128×128 on the Chrome Web Store listing.
+
+  Rasterized into 16/32/48/128 PNGs by `extension/public/icons/generate.py`.
+  Edit this file then re-run the script to regenerate.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="coralGradient" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#FF8A65"/>
+      <stop offset="1" stop-color="#E84855"/>
+    </linearGradient>
+  </defs>
+  <rect x="0" y="0" width="128" height="128" rx="24" ry="24" fill="url(#coralGradient)"/>
+  <path d="M 90 38 A 36 36 0 1 0 90 90"
+        stroke="white"
+        stroke-width="18"
+        fill="none"
+        stroke-linecap="round"/>
+</svg>

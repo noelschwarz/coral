@@ -92,6 +92,26 @@ jobs:
           name: dist
           path: dist/
 
+      - name: Set up Node for the extension build
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: extension/package-lock.json
+
+      - name: Build the Chrome extension
+        run: |
+          cd extension
+          npm ci
+          npm run build
+          cd dist
+          # Stable name (no version) so the README can link to
+          # releases/latest/download/coral-extension.zip.
+          zip -r ../../coral-extension.zip .
+
+      - name: Compute extension checksum
+        run: sha256sum coral-extension.zip >> dist/SHA256SUMS
+
       - name: Draft GitHub Release
         uses: softprops/action-gh-release@v2
         with:
@@ -110,15 +130,20 @@ jobs:
             - [ ] Confirm the threat-model document reflects what's in the build
             - [ ] Confirm no `Partial` status remains in `THREAT_MODEL.md` §6.2
 
-            **Install:**
+            **Install (Python):**
 
             ```bash
             pip install coralbridge==${{ needs.build.outputs.version }}
             ```
+
+            **Install (Chrome extension):** download `coral-extension.zip`
+            below, unzip it anywhere, and load the unpacked directory in
+            Chrome via `chrome://extensions` → Developer mode → Load unpacked.
           files: |
             dist/*.tar.gz
             dist/*.whl
             dist/SHA256SUMS
+            coral-extension.zip
 
   publish-pypi:
     needs: [build, release]

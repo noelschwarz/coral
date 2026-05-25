@@ -75,26 +75,7 @@ Update `CHANGELOG.md` to add the release date and ensure the
 `[Unreleased]` section is empty (or moved into the new release
 entry). Commit any final-polish edits before tagging.
 
-### 2. Build the Chrome extension bundle
-
-The release workflow doesn't build the extension (it's a separate
-codebase under `extension/`). Build it locally and stash the zip
-somewhere; you'll attach it to the GitHub Release in step 4.
-
-```sh
-cd extension
-npm ci
-npm run build
-cd dist
-zip -r ../../coral-extension.zip .
-cd ../..
-```
-
-The file `coral-extension.zip` at the repo root is what you'll upload.
-Keep the name stable (no version number) so the README can link to
-`releases/latest/download/coral-extension.zip`.
-
-### 3. Tag and push
+### 2. Tag and push
 
 ```sh
 git tag -s v0.6.0 -m "coralbridge 0.6.0"
@@ -105,29 +86,31 @@ The release workflow now runs:
 
 1. **`build`** — installs SQLCipher, syncs uv, runs the full quality
    gates, builds sdist + wheel, computes `SHA256SUMS`.
-2. **`release`** — drafts a GitHub Release with the changelog stub
-   and attaches the build artifacts.
+2. **`release`** — builds the Chrome extension (`npm ci && npm run
+   build`), zips it into `coral-extension.zip`, drafts a GitHub Release
+   with the changelog stub, and attaches all four artifacts (sdist,
+   wheel, `SHA256SUMS`, extension zip).
 3. **`publish-pypi`** — paused on the `pypi` environment gate, waiting
    for your approval.
 
 Watch it at `https://github.com/noelschwarz/coral/actions`.
 
-### 4. Edit the draft Release
+### 3. Edit the draft Release
 
 1. Go to https://github.com/noelschwarz/coral/releases.
-2. The draft Release `coralbridge 0.6.0` is waiting for you.
-3. Upload `coral-extension.zip` as an additional asset (drag-and-drop
-   into the assets area).
-4. Replace the templated body with the relevant section of
+2. The draft Release `coralbridge 0.6.0` is waiting for you with all
+   artifacts already attached (sdist + wheel + extension zip +
+   checksums).
+3. Replace the templated body with the relevant section of
    `CHANGELOG.md` (paste the `## [0.6.0]` block).
-5. Verify the four pre-publish checklist items in the template:
+4. Verify the four pre-publish checklist items in the template:
    - [ ] CI run end-to-end on macOS (manual today)
    - [ ] SHA-256 sums match `dist/SHA256SUMS`
    - [ ] Threat model reflects what's in the build
    - [ ] No `Partial` status remains in `THREAT_MODEL.md` §6.2
-6. Click **Publish release**.
+5. Click **Publish release**.
 
-### 5. Approve the PyPI publish
+### 4. Approve the PyPI publish
 
 1. Back in the Actions tab, the `publish-pypi` job is waiting on the
    `pypi` environment.
@@ -135,7 +118,7 @@ Watch it at `https://github.com/noelschwarz/coral/actions`.
 3. PyPI receives the sdist + wheel via OIDC. ~30 seconds later the
    project is live at https://pypi.org/project/coralbridge/.
 
-### 6. Smoke-test the published artifact
+### 5. Smoke-test the published artifact
 
 In a clean shell (or a fresh VM):
 
@@ -145,7 +128,7 @@ coral --version       # should print 0.6.0
 coral diagnose        # quick install self-check
 ```
 
-### 7. Announce
+### 6. Announce
 
 - Post to GitHub Discussions ("Release" category).
 - If launching to a wider audience (Show HN, Twitter), link to the

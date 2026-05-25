@@ -113,7 +113,7 @@ jobs:
         run: sha256sum coral-extension.zip >> dist/SHA256SUMS
 
       - name: Draft GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           draft: true # human reviews before publishing
           generate_release_notes: true

@@ -19,6 +19,12 @@ passphrase-encrypted vault. When an agent needs to act on that site, Coral
 spins up a fresh isolated Chromium with your session restored and hands the
 agent a CDP URL it can drive. **The agent never sees your password.**
 
+<p align="center">
+  <img src="docs/img/demo.gif"
+       alt="Coral demo: terminal opens a captured GitHub session; a fresh authenticated Chromium pops up, prints the page title, writes refreshed cookies back to the encrypted vault, and closes — without the agent ever seeing the password."
+       width="780">
+</p>
+
 ## How it fits together
 
 - **Python daemon + CLI** (this repo) — vault, HTTP API, MCP server,

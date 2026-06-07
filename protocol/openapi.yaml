@@ -1,0 +1,397 @@
+openapi: 3.1.0
+info:
+  title: Coral Cloud API
+  version: 0.1.0
+  description: |
+    Public wire protocol for **Coral Cloud** — the fully-hosted Coral SaaS
+    (see ../docs/ADR-019-cloud-architecture.md).
+
+    This spec is the contract between the `coral-cloud` client SDKs (this
+    repo) and the private `coral-cloud-server`. It is published for
+    transparency and so SDK authors have a single source of truth.
+
+    **Status: design-stage.** No server implements this yet. Paths and
+    schemas may change until the first server PR (Track CLOUD-2). The SDK
+    skeleton in `clients/python/` is built against this contract and tested
+    against an in-process fake.
+
+    ## Auth
+    All endpoints except `GET /v1/health` require a project API key:
+
+        Authorization: Bearer ck_live_xxxxxxxxxxxxxxxxxxxxxxxx
+
+    Keys are issued in the dashboard, stored server-side only as hashes,
+    and scoped to one project. See THREAT_MODEL-cloud.md (C2).
+
+    ## The CDP hand-off
+    `POST /v1/sessions/{session_id}/open` returns a `cdp_url` of the form
+    `wss://<gateway-host>/cdp/<cdp_session_token>`. The token is
+    short-lived, single-session, and tenant-bound (THREAT_MODEL-cloud.md
+    C3). Connect any Chrome DevTools Protocol client to it
+    (Playwright `connect_over_cdp`, Puppeteer, raw CDP). The shape mirrors
+    the local product's `coral_open_session` response so existing
+    integrations are drop-in — only the scheme changes (`wss` vs
+    `ws://127.0.0.1`).
+  license:
+    name: Apache-2.0
+servers:
+  - url: https://api.coral.dev
+    description: Production (placeholder; not yet live)
+
+security:
+  - apiKey: []
+
+tags:
+  - name: sessions
+    description: List, open, and close authenticated browser sessions.
+  - name: login
+    description: Remote interactive login — capture a session in a hosted browser.
+  - name: policies
+    description: Per-origin policy (allow/deny/review), reused from the local engine.
+  - name: audit
+    description: Append-only audit log, scoped to the project.
+  - name: meta
+    description: Health and version.
+
+paths:
+  /v1/health:
+    get:
+      tags: [meta]
+      summary: Liveness/readiness probe.
+      security: []
+      responses:
+        "200":
+          description: Service is up.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status: { type: string, example: ok }
+                  version: { type: string, example: "0.1.0" }
+
+  /v1/sessions:
+    get:
+      tags: [sessions]
+      summary: List captured sessions for the authenticated project.
+      parameters:
+        - name: origin
+          in: query
+          required: false
+          schema: { type: string }
+          description: Filter to a single origin, e.g. `https://github.com`.
+        - name: status
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [active, expired, revoked]
+      responses:
+        "200":
+          description: A list of sessions (never includes `state_blob`).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/SessionList" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/sessions/{session_id}/open:
+    post:
+      tags: [sessions]
+      summary: Open an isolated cloud browser restored from a captured session.
+      description: |
+        Spins up one disposable Chromium in the execution plane, restores the
+        decrypted session state, installs the policy route handler, and mints a
+        short-lived CDP session token. Returns a `wss` CDP URL.
+      parameters:
+        - $ref: "#/components/parameters/SessionId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/OpenSessionRequest" }
+      responses:
+        "201":
+          description: An open session with a connectable CDP URL.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/OpenSession" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+        "409":
+          description: Session is not in an openable state (expired/revoked).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Error" }
+        "429": { $ref: "#/components/responses/RateLimited" }
+
+  /v1/sessions/handles/{handle}/close:
+    post:
+      tags: [sessions]
+      summary: Close an open session and tear down its browser.
+      description: |
+        Idempotent. Triggers policy-gated cookie write-back (ADR-018) before
+        the browser is destroyed and the CDP token invalidated.
+      parameters:
+        - $ref: "#/components/parameters/Handle"
+      responses:
+        "200":
+          description: Closed (or already closed).
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  closed: { type: boolean, example: true }
+                  reason: { type: string, example: agent_closed }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/logins:
+    post:
+      tags: [login]
+      summary: Start a remote interactive login for an origin.
+      description: |
+        Launches a hosted live-view browser. The user opens `live_view_url`,
+        logs into the target site (2FA/captcha handled in-browser by the
+        human), and the resulting state is captured into the vault. Poll
+        `GET /v1/logins/{login_id}` for completion.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/StartLoginRequest" }
+      responses:
+        "201":
+          description: A pending login with a live-view URL to hand to the user.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LoginSession" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/logins/{login_id}:
+    get:
+      tags: [login]
+      summary: Poll a remote login's status.
+      parameters:
+        - name: login_id
+          in: path
+          required: true
+          schema: { type: string }
+      responses:
+        "200":
+          description: Current login state; `session_id` is set once captured.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/LoginSession" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+
+  /v1/policies/{origin}:
+    get:
+      tags: [policies]
+      summary: Get the active policy YAML for an origin.
+      parameters: [{ $ref: "#/components/parameters/Origin" }]
+      responses:
+        "200":
+          description: The policy.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Policy" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+        "404": { $ref: "#/components/responses/NotFound" }
+    put:
+      tags: [policies]
+      summary: Replace the policy YAML for an origin.
+      parameters: [{ $ref: "#/components/parameters/Origin" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [yaml_body]
+              properties:
+                yaml_body: { type: string, maxLength: 65536 }
+      responses:
+        "200":
+          description: Updated policy.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/Policy" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+  /v1/audit:
+    get:
+      tags: [audit]
+      summary: Tail the project's audit log.
+      parameters:
+        - name: since
+          in: query
+          schema: { type: integer, format: int64 }
+          description: Unix seconds; return entries at or after this time.
+        - name: limit
+          in: query
+          schema: { type: integer, default: 50, maximum: 1000 }
+      responses:
+        "200":
+          description: Audit entries, newest first.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/AuditList" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
+components:
+  securitySchemes:
+    apiKey:
+      type: http
+      scheme: bearer
+      bearerFormat: "ck_live_*"
+
+  parameters:
+    SessionId:
+      name: session_id
+      in: path
+      required: true
+      schema: { type: string }
+    Handle:
+      name: handle
+      in: path
+      required: true
+      schema: { type: string }
+    Origin:
+      name: origin
+      in: path
+      required: true
+      description: URL-encoded origin, e.g. `https%3A%2F%2Fgithub.com`.
+      schema: { type: string }
+
+  responses:
+    Unauthorized:
+      description: Missing/invalid API key.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    NotFound:
+      description: Resource not found in this project.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+    RateLimited:
+      description: Quota or rate limit exceeded.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error: { type: string, example: invalid_token }
+        message: { type: string }
+
+    Session:
+      type: object
+      description: A captured session. Never includes `state_blob`.
+      required: [id, origin, status, created_at]
+      properties:
+        id: { type: string }
+        origin: { type: string, example: "https://github.com" }
+        label: { type: string, nullable: true }
+        status:
+          type: string
+          enum: [active, expired, revoked]
+        created_at: { type: integer, format: int64 }
+        last_used_at: { type: integer, format: int64, nullable: true }
+        expires_at: { type: integer, format: int64, nullable: true }
+        attention_at: { type: integer, format: int64, nullable: true }
+        attention_reason: { type: string, nullable: true }
+
+    SessionList:
+      type: object
+      required: [sessions]
+      properties:
+        sessions:
+          type: array
+          items: { $ref: "#/components/schemas/Session" }
+
+    OpenSessionRequest:
+      type: object
+      required: [purpose]
+      properties:
+        purpose:
+          type: string
+          description: Human-readable reason, recorded in the audit log.
+          maxLength: 2000
+
+    OpenSession:
+      type: object
+      required: [handle, session_id, cdp_url, expires_at]
+      properties:
+        handle:
+          type: string
+          description: Opaque handle used to close this session.
+        session_id: { type: string }
+        cdp_url:
+          type: string
+          format: uri
+          example: "wss://gw.coral.dev/cdp/cdpt_9f3a...e21"
+          description: Connect any CDP client here. Short-lived, tenant-bound.
+        expires_at: { type: integer, format: int64 }
+        policy_summary:
+          type: object
+          additionalProperties: true
+          description: Compact summary of the policy enforced on this session.
+
+    StartLoginRequest:
+      type: object
+      required: [origin]
+      properties:
+        origin: { type: string, example: "https://github.com" }
+        label: { type: string, nullable: true }
+
+    LoginSession:
+      type: object
+      required: [login_id, origin, status, live_view_url]
+      properties:
+        login_id: { type: string }
+        origin: { type: string }
+        status:
+          type: string
+          enum: [pending, awaiting_user, captured, expired, failed]
+        live_view_url:
+          type: string
+          format: uri
+          description: Hand this to the user to perform the login.
+        session_id:
+          type: string
+          nullable: true
+          description: Set once the login is captured into a session.
+        expires_at: { type: integer, format: int64 }
+
+    Policy:
+      type: object
+      required: [origin, yaml_body, updated_at]
+      properties:
+        origin: { type: string }
+        yaml_body: { type: string }
+        updated_at: { type: integer, format: int64 }
+
+    AuditEntry:
+      type: object
+      required: [timestamp, event_type, detail]
+      properties:
+        id: { type: integer, format: int64, nullable: true }
+        timestamp: { type: integer, format: int64 }
+        session_id: { type: string, nullable: true }
+        agent_id: { type: string, nullable: true }
+        event_type: { type: string, example: "session.opened" }
+        origin: { type: string, nullable: true }
+        detail: { type: string, description: JSON-encoded detail object. }
+
+    AuditList:
+      type: object
+      required: [entries]
+      properties:
+        entries:
+          type: array
+          items: { $ref: "#/components/schemas/AuditEntry" }

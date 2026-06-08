@@ -166,6 +166,22 @@ def test_wait_for_login_returns_when_captured(fake: FakeTransport) -> None:
     assert login.session_id == "s9"
 
 
+def test_list_policies_parses_rows(fake: FakeTransport) -> None:
+    fake.on(
+        "GET",
+        "/v1/policies",
+        200,
+        {
+            "policies": [
+                {"origin": "https://github.com", "yaml_body": "x: 1", "updated_at": 1},
+                {"origin": "https://gmail.com", "yaml_body": "y: 2", "updated_at": 2},
+            ]
+        },
+    )
+    policies = _client(fake).list_policies()
+    assert {p.origin for p in policies} == {"https://github.com", "https://gmail.com"}
+
+
 def test_origin_is_url_encoded_in_policy_path(fake: FakeTransport) -> None:
     # The route is registered with the encoded path; if encoding is wrong the
     # fake returns 404 and model_validate fails.

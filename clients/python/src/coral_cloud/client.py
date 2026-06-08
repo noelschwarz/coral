@@ -206,6 +206,16 @@ class CoralCloud:
 
     # -- policies ----------------------------------------------------------
 
+    def list_policies(self) -> list[Policy]:
+        """List the project's policies.
+
+        On first access the project is seeded with the bundled behavior
+        packs, so this returns those defaults until you override them.
+        """
+        data = self._call("GET", "/v1/policies")
+        rows = (data or {}).get("policies", [])
+        return [Policy.model_validate(r) for r in rows]
+
     def get_policy(self, origin: str) -> Policy:
         data = self._call("GET", f"/v1/policies/{quote(origin, safe='')}")
         return Policy.model_validate(data)

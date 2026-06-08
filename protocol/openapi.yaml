@@ -185,6 +185,22 @@ paths:
         "401": { $ref: "#/components/responses/Unauthorized" }
         "404": { $ref: "#/components/responses/NotFound" }
 
+  /v1/policies:
+    get:
+      tags: [policies]
+      summary: List the project's policies.
+      description: |
+        On first access a tenant is seeded with the bundled behavior packs
+        (GitHub, Gmail, Linear, LinkedIn, Notion, Slack), so this returns
+        those defaults until the caller overrides them with `PUT`.
+      responses:
+        "200":
+          description: The project's policies.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/PolicyList" }
+        "401": { $ref: "#/components/responses/Unauthorized" }
+
   /v1/policies/{origin}:
     get:
       tags: [policies]
@@ -375,6 +391,14 @@ components:
         origin: { type: string }
         yaml_body: { type: string }
         updated_at: { type: integer, format: int64 }
+
+    PolicyList:
+      type: object
+      required: [policies]
+      properties:
+        policies:
+          type: array
+          items: { $ref: "#/components/schemas/Policy" }
 
     AuditEntry:
       type: object

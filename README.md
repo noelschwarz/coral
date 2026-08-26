@@ -34,6 +34,10 @@ agent a CDP URL it can drive. **The agent never sees your password.**
   review, load it unpacked as shown below.
 - **MCP** — any MCP-speaking agent (Claude Desktop, Cursor, Claude Code,
   browser-use, Stagehand, …) drives Coral over stdio or local HTTP.
+- **Coral Cloud** (`clients/`, `protocol/`) — a design-stage hosted
+  counterpart with the same agent-facing shape. See
+  [Coral Cloud](#coral-cloud-design-stage) below; nothing in this section
+  depends on it.
 
 ## What it looks like in your code
 
@@ -247,6 +251,28 @@ client drives it.
 
 Copy, modify, and discard.
 
+## Coral Cloud (design-stage)
+
+Coral Cloud is the hosted counterpart: the encrypted session and the
+browser live in Coral's cloud, and an agent reaches them with an API key
+instead of running a local daemon and extension. The `open_session`
+response mirrors `coral_open_session`, so an integration ports by
+swapping where `cdp_url` comes from (`wss://…` instead of
+`ws://127.0.0.1:…`).
+
+**No server implements this yet.** What exists today is the public wire
+contract and a Python SDK skeleton tested against an in-process fake:
+
+- [`protocol/openapi.yaml`](protocol/openapi.yaml) — the public contract
+  between SDKs and the server ([`protocol/README.md`](protocol/README.md)).
+- [`clients/python/`](clients/python/) — the `coral-cloud` Python SDK
+  skeleton.
+- [ADR-019](docs/ADR-019-cloud-architecture.md) — architecture, and
+  [THREAT_MODEL-cloud.md](THREAT_MODEL-cloud.md) — how the hosted trust
+  model differs from the local one. Read it before choosing Cloud: it
+  trades "credentials never leave my machine" for zero-install
+  convenience.
+
 ## Daily commands
 
 ```sh
@@ -289,15 +315,19 @@ in [ADR-011](docs/ADR-011-policy-engine.md).
 
 ## Docs
 
-- [`coral-engineering-spec.md`](coral-engineering-spec.md) — source of truth.
 - [`docs/architecture.md`](docs/architecture.md) — current module map.
 - [`THREAT_MODEL.md`](THREAT_MODEL.md) — what Coral defends against (and what it doesn't).
+- [`THREAT_MODEL-cloud.md`](THREAT_MODEL-cloud.md) — the hosted product's
+  (design-stage) trust model.
 - [`docs/policy-language.md`](docs/policy-language.md) — YAML policy schema.
+- [`docs/performance.md`](docs/performance.md) — measured session
+  open/close latencies.
+- [`protocol/openapi.yaml`](protocol/openapi.yaml) — Coral Cloud wire contract.
 - [`SECURITY.md`](SECURITY.md) — vulnerability reporting policy.
 - [`CHANGELOG.md`](CHANGELOG.md) — release history.
 - [`docs/release-process.md`](docs/release-process.md) — tagging,
   building, attaching the extension zip, publishing to PyPI.
-- `docs/ADR-006` … `docs/ADR-018` — individual architectural decisions.
+- `docs/ADR-006` … `docs/ADR-019` — individual architectural decisions.
 
 ## Contributing
 
